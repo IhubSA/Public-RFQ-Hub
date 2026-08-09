@@ -367,18 +367,22 @@
       <span style="font-weight:600; font-size:13px;">Total score</span>
       <span id="eval-total" class="mono" style="font-weight:600; font-size:16px;">0 / 100</span>
     </div>
-    <label style="margin-top:14px; display:flex; align-items:center; gap:8px; font-weight:400;">
-      <input type="checkbox" id="eval-conflict" style="width:auto;" onchange="document.getElementById('eval-conflict-notes-wrap').style.display=this.checked?'block':'none';">
-      I declare a conflict of interest in evaluating this applicant
+    <label style="margin-top:14px; display:flex; align-items:flex-start; gap:8px; font-weight:400;">
+      <input type="checkbox" id="eval-conflict" style="width:auto; margin-top:3px;" onchange="toggleEvalConflictUI()">
+      <span>I have a conflict of interest regarding this vendor — a personal, family, or financial connection, or anything else that could reasonably be seen to affect my scoring</span>
     </label>
     <div id="eval-conflict-notes-wrap" style="display:none; margin-top:8px;">
-      <label>Details</label>
+      <label>Nature of the conflict</label>
       <textarea id="eval-conflict-notes" placeholder="Describe the nature of the conflict"></textarea>
+    </div>
+    <div id="eval-coi-blocked-note" style="display:none; margin-top:10px; padding:10px 12px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); font-size:12px; color:var(--rust);">
+      Because you've declared a conflict, you can't score this applicant yourself. Log your recusal below, then hand this case to a colleague who doesn't have a conflict.
     </div>
   </div>
   <div class="modal-foot">
     <button class="btn secondary" onclick="closeAll()">Cancel</button>
-    <button class="btn gold" onclick="submitEvaluation()">Save evaluation</button>
+    <button class="btn gold" id="eval-save-btn" onclick="submitEvaluation()">Save evaluation</button>
+    <button class="btn secondary" id="eval-recuse-btn" style="display:none;" onclick="submitEvalRecusal()">Log recusal &amp; step back</button>
   </div>
 </div>
 
@@ -472,18 +476,29 @@
     <input type="text" id="ap-name" placeholder="Full name">
     <label>Role</label>
     <input type="text" id="ap-role" placeholder="e.g. Procurement Manager">
-    <label>Conflict-of-interest declaration</label>
-    <select id="ap-coi">
-      <option value="None declared">None declared</option>
-      <option value="Declared — recused">Declared — recused</option>
-    </select>
-    <label>Reason / comments</label>
-    <textarea id="ap-comment" placeholder="Why this decision is being made"></textarea>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:10px; font-weight:400;">
+      <input type="checkbox" id="ap-coi-checkbox" style="width:auto; margin-top:3px;" onchange="toggleConflictUI()">
+      <span>I have a conflict of interest regarding this vendor — a personal, family, or financial connection, or anything else that could reasonably be seen to affect my judgement</span>
+    </label>
+    <div id="ap-coi-reason-wrap" style="display:none; margin-top:8px;">
+      <label>Nature of the conflict</label>
+      <textarea id="ap-coi-reason" placeholder="Describe the nature of the conflict"></textarea>
+    </div>
+    <div id="ap-coi-blocked-note" style="display:none; margin-top:10px; padding:10px 12px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); font-size:12px; color:var(--rust);">
+      Because you've declared a conflict, you can't record this decision yourself. Log your recusal below, then hand this case to a colleague who doesn't have a conflict.
+    </div>
+    <div id="ap-normal-fields">
+      <label>Reason / comments</label>
+      <textarea id="ap-comment" placeholder="Why this decision is being made"></textarea>
+    </div>
   </div>
   <div class="modal-foot">
     <button class="btn secondary" onclick="closeAll()">Cancel</button>
-    <button class="btn danger" id="ap-reject-btn" onclick="submitApproval(false)">Reject / Regret</button>
-    <button class="btn gold" id="ap-approve-btn" onclick="submitApproval(true)">Approve</button>
+    <span id="ap-normal-actions">
+      <button class="btn danger" id="ap-reject-btn" onclick="submitApproval(false)">Reject / Regret</button>
+      <button class="btn gold" id="ap-approve-btn" onclick="submitApproval(true)">Approve</button>
+    </span>
+    <button class="btn secondary" id="ap-recuse-btn" style="display:none;" onclick="submitRecusal()">Log recusal &amp; step back</button>
   </div>
 </div>
 

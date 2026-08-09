@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.21.0",
-  date: "2026-08-09",
+  version: "2.22.0",
+  date: "2026-08-10",
   changelog: [
+    "2.22.0 (2026-08-10) — The conflict-of-interest declaration on decision gates and evaluations was clearer about what it was for now, but still didn't actually do anything — selecting it was never even read by the code. Fixed: it's now explicit that this is the reviewer's own conflict (not the vendor's), and declaring one genuinely blocks that person from recording the decision or score. Instead, they log a recusal — reason required — to the permanent audit trail, and are told to hand the case to a colleague. Verified directly: approving or saving a score is refused outright while a conflict is checked, a recusal with no reason is rejected, and a valid recusal logs correctly without ever touching the applicant's status or score.",
     "2.21.0 (2026-08-09) — Completed the full set of email notifications from the original 17-step process design. Eight triggers that were either missing or only logged locally now actually send: invitation to submit a proposal, proposal received, signature reminder/escalation, contract signed, and onboarding details — plus the single generic rejection email is now three separate stage-specific ones (screening outcome, validation outcome, approval outcome), each with wording matched to why that particular stage ended the case. Verified all eight fire from the correct action with the correct trigger type, and confirmed real delivery through Resend. Every trigger point from the original design is now wired end to end, aside from 'application incomplete' which has no corresponding action in the system yet.",
     "2.20.0 (2026-08-06) — No application on an RFQ can be reviewed, screened, validated, evaluated, scored, or commented on until that RFQ's closing date has passed — enforced at the database level, not just hidden in the interface. The only thing that can still be done to a still-open RFQ is extend its closing date, which requires a reason and immediately publishes a transparent notice on the public tender listing (previous date, new date, and why). Verified directly against the database: a fully-permissioned account is genuinely blocked from touching an applicant's status while the RFQ is open, and the exact same action succeeds the moment it closes.",
     "2.19.0 (2026-08-06) — Staff are now automatically signed out after 30 minutes of inactivity in the admin console (no mouse movement, clicks, keyboard input, or scrolling). A warning appears 2 minutes before it happens with a 'Stay signed in' option, so nobody gets logged out without notice. Verified the full timeline directly: no warning before 28 minutes, warning shown correctly at 28, confirming activity resets the clock, and the actual sign-out firing correctly at 30 with a clear message on the login screen explaining why.",
@@ -937,10 +938,17 @@ function openEvaluationModal(applicantId){
   }).join('');
   document.getElementById('eval-conflict').checked = existing ? !!existing.conflict_declared : false;
   document.getElementById('eval-conflict-notes').value = existing ? (existing.conflict_notes||'') : '';
-  document.getElementById('eval-conflict-notes-wrap').style.display = (existing && existing.conflict_declared) ? 'block' : 'none';
+  toggleEvalConflictUI();
   updateEvalTotal();
   document.getElementById('modal-evaluation').classList.add('active');
   document.getElementById('overlay').classList.add('active');
+}
+function toggleEvalConflictUI(){
+  const checked = document.getElementById('eval-conflict').checked;
+  document.getElementById('eval-conflict-notes-wrap').style.display = checked ? 'block' : 'none';
+  document.getElementById('eval-coi-blocked-note').style.display = checked ? 'block' : 'none';
+  document.getElementById('eval-save-btn').style.display = checked ? 'none' : 'inline-block';
+  document.getElementById('eval-recuse-btn').style.display = checked ? 'inline-block' : 'none';
 }
 function updateEvalTotal(){
   const inputs = [...document.querySelectorAll ? document.querySelectorAll('.eval-score-input') : []];
@@ -954,6 +962,7 @@ function updateEvalTotal(){
   if(totalEl) totalEl.textContent = `${total} / 100`;
 }
 async function submitEvaluation(){
+  if(document.getElementById('eval-conflict').checked){ toast("Can't proceed", "You've declared a conflict of interest — log your recusal instead."); return; }
   const a = applicants.find(x=>x.id===evaluatingApplicantId);
   if(!a) return;
   const inputs = [...document.querySelectorAll('.eval-score-input')];
@@ -963,20 +972,29 @@ async function submitEvaluation(){
     return { key:c.key, label:c.label, maxPoints:c.maxPoints, score };
   });
   const total = scores.reduce((sum,s)=>sum+s.score, 0);
-  const conflictDeclared = document.getElementById('eval-conflict').checked;
-  const conflictNotes = document.getElementById('eval-conflict-notes').value.trim();
   const evaluator = (currentEmployee && currentEmployee.email) || 'Unknown';
 
-  const payload = { applicant_id:a.id, scores, total_score:total, conflict_declared:conflictDeclared, conflict_notes:conflictNotes||null, evaluator, evaluated_at:new Date().toISOString() };
+  const payload = { applicant_id:a.id, scores, total_score:total, conflict_declared:false, conflict_notes:null, evaluator, evaluated_at:new Date().toISOString() };
   const { data, error } = await sb.from('rfq_evaluations').upsert(payload, {onConflict:'applicant_id'}).select().maybeSingle();
   if(error){ console.error('evaluation save failed', error); toast("Not saved", "Could not save this evaluation — check the console."); return; }
 
   currentApplicantEvaluation = data || payload;
-  logAudit(`${a.business} evaluated — total score ${total}/100`, evaluator, conflictDeclared? 'Conflict of interest declared':'');
+  logAudit(`${a.business} evaluated — total score ${total}/100`, evaluator, '');
   closeAll();
   toast("Evaluation saved", `${a.business} scored ${total}/100.`);
   renderEvaluationSection(a);
   renderRankings();
+}
+function submitEvalRecusal(){
+  const a = applicants.find(x=>x.id===evaluatingApplicantId);
+  if(!a) return;
+  const reason = document.getElementById('eval-conflict-notes').value.trim();
+  if(!reason){ toast("Details required", "Please describe the nature of the conflict before logging your recusal."); return; }
+  const evaluator = (currentEmployee && currentEmployee.email) || 'Unknown';
+  logAudit(`${evaluator} declared a conflict of interest and stepped back from evaluating ${a.business} (${a.id})`, evaluator, reason);
+  toast("Recusal logged", "No score was recorded. Please hand this case to a colleague without a conflict.");
+  closeAll();
+  renderAudit();
 }
 
 function rfqIsClosed(rfqId){
@@ -1193,6 +1211,20 @@ function sendSigningInvite(applicantId){
 }
 
 let pendingAction = null;
+function toggleConflictUI(){
+  const checked = document.getElementById('ap-coi-checkbox').checked;
+  document.getElementById('ap-coi-reason-wrap').style.display = checked ? 'block' : 'none';
+  document.getElementById('ap-coi-blocked-note').style.display = checked ? 'block' : 'none';
+  document.getElementById('ap-normal-fields').style.display = checked ? 'none' : 'block';
+  document.getElementById('ap-normal-actions').style.display = checked ? 'none' : 'inline';
+  document.getElementById('ap-recuse-btn').style.display = checked ? 'inline-block' : 'none';
+}
+function resetConflictUI(){
+  document.getElementById('ap-coi-checkbox').checked = false;
+  document.getElementById('ap-coi-reason').value = '';
+  document.getElementById('ap-comment').value = '';
+  toggleConflictUI();
+}
 function requestApproval(applicantId){
   const a = applicants.find(x=>x.id===applicantId);
   const nextStage = KANBAN_STAGES[KANBAN_STAGES.indexOf(a.status)+1];
@@ -1204,6 +1236,7 @@ function requestApproval(applicantId){
   document.getElementById('ap-approve-btn').textContent = `Approve → ${nextStage}`;
   document.getElementById('ap-reject-btn').style.display = hasRegret ? 'inline-block' : 'none';
   document.getElementById('ap-reject-btn').textContent = 'Regret / Unsuccessful';
+  resetConflictUI();
   document.getElementById('modal-approval').classList.add('active');
   document.getElementById('overlay').classList.add('active');
 }
@@ -1217,8 +1250,28 @@ function requestPublishRfq(rfqId){
   document.getElementById('ap-approve-btn').style.display = 'inline-block';
   document.getElementById('ap-approve-btn').textContent = 'Approve → Publish';
   document.getElementById('ap-reject-btn').style.display = 'none';
+  resetConflictUI();
   document.getElementById('modal-approval').classList.add('active');
   document.getElementById('overlay').classList.add('active');
+}
+function submitRecusal(){
+  const name = document.getElementById('ap-name').value.trim() || "Unnamed reviewer";
+  const role = document.getElementById('ap-role').value.trim() || "Authorised reviewer";
+  const reason = document.getElementById('ap-coi-reason').value.trim();
+  if(!reason){ toast("Details required", "Please describe the nature of the conflict before logging your recusal."); return; }
+
+  let subject = 'this case';
+  if(pendingAction && pendingAction.type==='applicant'){
+    const a = applicants.find(x=>x.id===pendingAction.applicantId);
+    if(a) subject = `${a.business} (${a.id})`;
+  } else if(pendingAction && pendingAction.type==='rfq_publish'){
+    const r = rfqs.find(x=>x.id===pendingAction.rfqId);
+    if(r) subject = `${r.id} — ${r.title}`;
+  }
+  logAudit(`${name} declared a conflict of interest and stepped back from ${subject}`, `${name} · ${role}`, reason);
+  toast("Recusal logged", "No decision was recorded. Please hand this case to a colleague without a conflict.");
+  closeAll();
+  renderAudit();
 }
 
 let rfqStatusRequestId = null;
@@ -1397,6 +1450,7 @@ async function submitClarificationAnswer(){
 }
 
 function submitApproval(isApprove){
+  if(document.getElementById('ap-coi-checkbox').checked){ toast("Can't proceed", "You've declared a conflict of interest — log your recusal instead."); return; }
   const name = document.getElementById('ap-name').value.trim() || "Unnamed reviewer";
   const role = document.getElementById('ap-role').value.trim() || "Authorised reviewer";
   const comment = document.getElementById('ap-comment').value.trim();
