@@ -367,10 +367,18 @@
       <span style="font-weight:600; font-size:13px;">Total score</span>
       <span id="eval-total" class="mono" style="font-weight:600; font-size:16px;">0 / 100</span>
     </div>
-    <label style="margin-top:14px; display:flex; align-items:flex-start; gap:8px; font-weight:400;">
-      <input type="checkbox" id="eval-conflict" style="width:auto; margin-top:3px;" onchange="toggleEvalConflictUI()">
-      <span>I have a conflict of interest regarding this vendor — a personal, family, or financial connection, or anything else that could reasonably be seen to affect my scoring</span>
+    <label style="margin-top:14px; font-weight:600; display:block;">Conflict-of-interest declaration</label>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:6px; font-weight:400;">
+      <input type="radio" name="eval-coi" id="eval-coi-none" style="width:auto; margin-top:3px;" onchange="toggleEvalConflictUI()">
+      <span>No, I have no conflict of interest regarding this vendor</span>
     </label>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:6px; font-weight:400;">
+      <input type="radio" name="eval-coi" id="eval-coi-yes" style="width:auto; margin-top:3px;" onchange="toggleEvalConflictUI()">
+      <span>Yes, I have a conflict of interest — a personal, family, or financial connection, or anything else that could reasonably be seen to affect my scoring</span>
+    </label>
+    <div id="eval-coi-prompt-note" style="margin-top:10px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius); font-size:12px; color:var(--ink-2);">
+      Please confirm whether you have a conflict of interest before this evaluation can be saved.
+    </div>
     <div id="eval-conflict-notes-wrap" style="display:none; margin-top:8px;">
       <label>Nature of the conflict</label>
       <textarea id="eval-conflict-notes" placeholder="Describe the nature of the conflict"></textarea>
@@ -476,10 +484,18 @@
     <input type="text" id="ap-name" placeholder="Full name">
     <label>Role</label>
     <input type="text" id="ap-role" placeholder="e.g. Procurement Manager">
-    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:10px; font-weight:400;">
-      <input type="checkbox" id="ap-coi-checkbox" style="width:auto; margin-top:3px;" onchange="toggleConflictUI()">
-      <span>I have a conflict of interest regarding this vendor — a personal, family, or financial connection, or anything else that could reasonably be seen to affect my judgement</span>
+    <label style="margin-top:10px; font-weight:600;">Conflict-of-interest declaration</label>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:6px; font-weight:400;">
+      <input type="radio" name="ap-coi" id="ap-coi-none" style="width:auto; margin-top:3px;" onchange="toggleConflictUI()">
+      <span>No, I have no conflict of interest regarding this vendor</span>
     </label>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:6px; font-weight:400;">
+      <input type="radio" name="ap-coi" id="ap-coi-yes" style="width:auto; margin-top:3px;" onchange="toggleConflictUI()">
+      <span>Yes, I have a conflict of interest — a personal, family, or financial connection, or anything else that could reasonably be seen to affect my judgement</span>
+    </label>
+    <div id="ap-coi-prompt-note" style="margin-top:10px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius); font-size:12px; color:var(--ink-2);">
+      Please confirm whether you have a conflict of interest before this decision can be recorded.
+    </div>
     <div id="ap-coi-reason-wrap" style="display:none; margin-top:8px;">
       <label>Nature of the conflict</label>
       <textarea id="ap-coi-reason" placeholder="Describe the nature of the conflict"></textarea>

@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.22.0",
+  version: "2.22.1",
   date: "2026-08-10",
   changelog: [
+    "2.22.1 (2026-08-10) — The conflict-of-interest declaration only had a tick for \"I have a conflict\" — leaving it blank silently meant 'no conflict', which isn't the same as someone actually confirming that. Replaced with two explicit options, neither selected by default: 'No, I have no conflict' or 'Yes, I have a conflict'. Approving, rejecting, or saving a score is now disabled until one is actively chosen — no more deciding by default. Verified directly: both buttons stay disabled with nothing selected, choosing 'No conflict' unlocks them, and the case still routes to the recusal flow exactly as before if 'Yes' is chosen.",
     "2.22.0 (2026-08-10) — The conflict-of-interest declaration on decision gates and evaluations was clearer about what it was for now, but still didn't actually do anything — selecting it was never even read by the code. Fixed: it's now explicit that this is the reviewer's own conflict (not the vendor's), and declaring one genuinely blocks that person from recording the decision or score. Instead, they log a recusal — reason required — to the permanent audit trail, and are told to hand the case to a colleague. Verified directly: approving or saving a score is refused outright while a conflict is checked, a recusal with no reason is rejected, and a valid recusal logs correctly without ever touching the applicant's status or score.",
     "2.21.0 (2026-08-09) — Completed the full set of email notifications from the original 17-step process design. Eight triggers that were either missing or only logged locally now actually send: invitation to submit a proposal, proposal received, signature reminder/escalation, contract signed, and onboarding details — plus the single generic rejection email is now three separate stage-specific ones (screening outcome, validation outcome, approval outcome), each with wording matched to why that particular stage ended the case. Verified all eight fire from the correct action with the correct trigger type, and confirmed real delivery through Resend. Every trigger point from the original design is now wired end to end, aside from 'application incomplete' which has no corresponding action in the system yet.",
     "2.20.0 (2026-08-06) — No application on an RFQ can be reviewed, screened, validated, evaluated, scored, or commented on until that RFQ's closing date has passed — enforced at the database level, not just hidden in the interface. The only thing that can still be done to a still-open RFQ is extend its closing date, which requires a reason and immediately publishes a transparent notice on the public tender listing (previous date, new date, and why). Verified directly against the database: a fully-permissioned account is genuinely blocked from touching an applicant's status while the RFQ is open, and the exact same action succeeds the moment it closes.",
@@ -936,7 +937,8 @@ function openEvaluationModal(applicantId){
         <input type="number" class="eval-score-input" data-key="${c.key}" data-max="${c.maxPoints}" min="0" max="${c.maxPoints}" value="${prior?prior.score:0}" oninput="updateEvalTotal()">
       </div>`;
   }).join('');
-  document.getElementById('eval-conflict').checked = existing ? !!existing.conflict_declared : false;
+  document.getElementById('eval-coi-none').checked = existing ? !existing.conflict_declared : false;
+  document.getElementById('eval-coi-yes').checked = existing ? !!existing.conflict_declared : false;
   document.getElementById('eval-conflict-notes').value = existing ? (existing.conflict_notes||'') : '';
   toggleEvalConflictUI();
   updateEvalTotal();
@@ -944,11 +946,14 @@ function openEvaluationModal(applicantId){
   document.getElementById('overlay').classList.add('active');
 }
 function toggleEvalConflictUI(){
-  const checked = document.getElementById('eval-conflict').checked;
-  document.getElementById('eval-conflict-notes-wrap').style.display = checked ? 'block' : 'none';
-  document.getElementById('eval-coi-blocked-note').style.display = checked ? 'block' : 'none';
-  document.getElementById('eval-save-btn').style.display = checked ? 'none' : 'inline-block';
-  document.getElementById('eval-recuse-btn').style.display = checked ? 'inline-block' : 'none';
+  const noneChecked = document.getElementById('eval-coi-none').checked;
+  const yesChecked = document.getElementById('eval-coi-yes').checked;
+  document.getElementById('eval-conflict-notes-wrap').style.display = yesChecked ? 'block' : 'none';
+  document.getElementById('eval-coi-blocked-note').style.display = yesChecked ? 'block' : 'none';
+  document.getElementById('eval-coi-prompt-note').style.display = (!noneChecked && !yesChecked) ? 'block' : 'none';
+  document.getElementById('eval-save-btn').style.display = yesChecked ? 'none' : 'inline-block';
+  document.getElementById('eval-save-btn').disabled = !noneChecked;
+  document.getElementById('eval-recuse-btn').style.display = yesChecked ? 'inline-block' : 'none';
 }
 function updateEvalTotal(){
   const inputs = [...document.querySelectorAll ? document.querySelectorAll('.eval-score-input') : []];
@@ -962,7 +967,7 @@ function updateEvalTotal(){
   if(totalEl) totalEl.textContent = `${total} / 100`;
 }
 async function submitEvaluation(){
-  if(document.getElementById('eval-conflict').checked){ toast("Can't proceed", "You've declared a conflict of interest — log your recusal instead."); return; }
+  if(!document.getElementById('eval-coi-none').checked){ toast("Can't proceed", "Please confirm you have no conflict of interest before saving this evaluation."); return; }
   const a = applicants.find(x=>x.id===evaluatingApplicantId);
   if(!a) return;
   const inputs = [...document.querySelectorAll('.eval-score-input')];
@@ -1212,15 +1217,20 @@ function sendSigningInvite(applicantId){
 
 let pendingAction = null;
 function toggleConflictUI(){
-  const checked = document.getElementById('ap-coi-checkbox').checked;
-  document.getElementById('ap-coi-reason-wrap').style.display = checked ? 'block' : 'none';
-  document.getElementById('ap-coi-blocked-note').style.display = checked ? 'block' : 'none';
-  document.getElementById('ap-normal-fields').style.display = checked ? 'none' : 'block';
-  document.getElementById('ap-normal-actions').style.display = checked ? 'none' : 'inline';
-  document.getElementById('ap-recuse-btn').style.display = checked ? 'inline-block' : 'none';
+  const noneChecked = document.getElementById('ap-coi-none').checked;
+  const yesChecked = document.getElementById('ap-coi-yes').checked;
+  document.getElementById('ap-coi-reason-wrap').style.display = yesChecked ? 'block' : 'none';
+  document.getElementById('ap-coi-blocked-note').style.display = yesChecked ? 'block' : 'none';
+  document.getElementById('ap-coi-prompt-note').style.display = (!noneChecked && !yesChecked) ? 'block' : 'none';
+  document.getElementById('ap-normal-fields').style.display = yesChecked ? 'none' : 'block';
+  document.getElementById('ap-normal-actions').style.display = yesChecked ? 'none' : 'inline';
+  document.getElementById('ap-approve-btn').disabled = !noneChecked;
+  document.getElementById('ap-reject-btn').disabled = !noneChecked;
+  document.getElementById('ap-recuse-btn').style.display = yesChecked ? 'inline-block' : 'none';
 }
 function resetConflictUI(){
-  document.getElementById('ap-coi-checkbox').checked = false;
+  document.getElementById('ap-coi-none').checked = false;
+  document.getElementById('ap-coi-yes').checked = false;
   document.getElementById('ap-coi-reason').value = '';
   document.getElementById('ap-comment').value = '';
   toggleConflictUI();
@@ -1450,7 +1460,7 @@ async function submitClarificationAnswer(){
 }
 
 function submitApproval(isApprove){
-  if(document.getElementById('ap-coi-checkbox').checked){ toast("Can't proceed", "You've declared a conflict of interest — log your recusal instead."); return; }
+  if(!document.getElementById('ap-coi-none').checked){ toast("Can't proceed", "Please confirm you have no conflict of interest before recording this decision."); return; }
   const name = document.getElementById('ap-name').value.trim() || "Unnamed reviewer";
   const role = document.getElementById('ap-role').value.trim() || "Authorised reviewer";
   const comment = document.getElementById('ap-comment').value.trim();
