@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.20.0",
-  date: "2026-08-06",
+  version: "2.21.0",
+  date: "2026-08-09",
   changelog: [
+    "2.21.0 (2026-08-09) — Completed the full set of email notifications from the original 17-step process design. Eight triggers that were either missing or only logged locally now actually send: invitation to submit a proposal, proposal received, signature reminder/escalation, contract signed, and onboarding details — plus the single generic rejection email is now three separate stage-specific ones (screening outcome, validation outcome, approval outcome), each with wording matched to why that particular stage ended the case. Verified all eight fire from the correct action with the correct trigger type, and confirmed real delivery through Resend. Every trigger point from the original design is now wired end to end, aside from 'application incomplete' which has no corresponding action in the system yet.",
     "2.20.0 (2026-08-06) — No application on an RFQ can be reviewed, screened, validated, evaluated, scored, or commented on until that RFQ's closing date has passed — enforced at the database level, not just hidden in the interface. The only thing that can still be done to a still-open RFQ is extend its closing date, which requires a reason and immediately publishes a transparent notice on the public tender listing (previous date, new date, and why). Verified directly against the database: a fully-permissioned account is genuinely blocked from touching an applicant's status while the RFQ is open, and the exact same action succeeds the moment it closes.",
     "2.19.0 (2026-08-06) — Staff are now automatically signed out after 30 minutes of inactivity in the admin console (no mouse movement, clicks, keyboard input, or scrolling). A warning appears 2 minutes before it happens with a 'Stay signed in' option, so nobody gets logged out without notice. Verified the full timeline directly: no warning before 28 minutes, warning shown correctly at 28, confirming activity resets the clock, and the actual sign-out firing correctly at 30 with a clear message on the login screen explaining why.",
     "2.18.1 (2026-08-05) — Fixed a real layout bug on the new 'Set your password' screen: it was placed outside the main app container instead of inside it like the regular sign-in screen, which left a blank screen-height gap above the actual form, requiring a scroll to see it. It now appears immediately, no scrolling needed.",
@@ -1153,6 +1154,10 @@ function advanceDirect(applicantId, nextStage, actor){
   logAudit(`${a.business} advanced to ${nextStage}`, actor||"System", "automated step");
   toast("Advanced", `${a.business} is now ${nextStage}.`);
   if(nextStage === 'Contract Being Drafted') triggerEmail('contract_drafted', a.id);
+  if(nextStage === 'Invited to Submit Proposal') triggerEmail('invitation_to_submit', a.id);
+  if(nextStage === 'Proposal Submitted') triggerEmail('proposal_received', a.id);
+  if(nextStage === 'Contract Signed') triggerEmail('contract_signed', a.id);
+  if(nextStage === 'Onboarding') triggerEmail('onboarding', a.id);
   renderApplicants(); renderApprovals(); renderDashboard();
   if(document.getElementById('applicant-drawer').classList.contains('active')) openApplicant(applicantId);
 }
@@ -1165,6 +1170,7 @@ function sendReminder(applicantId){
   a.timeline.push(entry);
   persistApplicantChange(a, entry);
   logAudit(`Signature reminder sent to ${a.business}`, "System", "escalation triggered");
+  triggerEmail('signature_reminder', a.id);
   toast("Reminder sent", `${a.business} has been reminded — case stays at Awaiting Signature.`);
   renderApplicants(); renderApprovals(); renderDashboard();
   if(document.getElementById('applicant-drawer').classList.contains('active')) openApplicant(applicantId);
@@ -1421,7 +1427,8 @@ function submitApproval(isApprove){
       toast("Decision recorded", `${a.business} is now ${pendingAction.nextStage}.`);
       if(pendingAction.nextStage === 'Preferred Bidder') triggerEmail('preferred_bidder', a.id);
     } else {
-      const pool = REGRET_POOLS[a.status] || ["Did not proceed"];
+      const originStage = a.status;
+      const pool = REGRET_POOLS[originStage] || ["Did not proceed"];
       a.reason = pool[Math.floor(Math.random()*pool.length)];
       a.status = "Unsuccessful";
       const entry = {date:today(), action:`Marked unsuccessful — ${a.reason}`, actor:`${name} (${role})`};
@@ -1429,7 +1436,8 @@ function submitApproval(isApprove){
       persistApplicantChange(a, entry);
       logAudit(`${a.business} marked unsuccessful — ${a.reason}`, `${name} · ${role}`, comment);
       toast("Regret recorded", `${a.business} moved to Unsuccessful. Regret email queued for release.`);
-      triggerEmail('rejected', a.id);
+      const regretTrigger = { "Under Screening":"screening_rejected", "Under Validation":"validation_rejected", "Recommendation Recorded":"approval_rejected" }[originStage] || "rejected";
+      triggerEmail(regretTrigger, a.id);
     }
   }
   closeAll();
