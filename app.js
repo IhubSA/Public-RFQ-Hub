@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.24.0",
-  date: "2026-08-10",
+  version: "2.25.0",
+  date: "2026-08-11",
   changelog: [
+    "2.25.0 (2026-08-11) — Closed RFQs used to vanish from the public portal the instant they closed — a real problem, since the invitation email explicitly tells applicants to use the portal's 'Ask a question' option for anything they need to raise. Closed RFQs now stay listed for 20 days after closing, clearly marked 'Closed' with the Apply button removed (applications are still genuinely cut off), while Ask a Question and the tender documents remain available. The question-submission function had the same cutoff and got the same fix, plus a bug fix along the way: it was still comparing against the old date-only format from before closing times existed, so it wasn't as precise as the rest of the system. After 20 days, an RFQ disappears from the public listing as before. Verified directly against the database — still-open, closed 5 days ago, and closed 19 days ago all correctly stay visible; closed 21 days ago correctly disappears.",
     "2.24.0 (2026-08-10) — RFQ closing dates now include a time, not just a day. A bare date was genuinely ambiguous — did it close at midnight, end of business, first thing that morning? The closing-date field (new RFQs, editing, and extensions) is now a real date-and-time picker, and every rule that depends on it — the no-reviews-before-closing lock, the public application cutoff, and public visibility — now compares to the precise minute rather than the calendar day. Existing RFQs default to 23:59:59 on their original date, so nothing changes for them unless edited. Verified directly against the database at minute-level precision: an RFQ closing 5 minutes out stays genuinely locked, and the same RFQ closing 1 minute in the past genuinely unlocks — plus the extend-date flow, the display formatting everywhere a closing time appears, and the full closing-lock regression suite all re-verified against the new precision.",
     "2.23.0 (2026-08-10) — Two real gaps fixed. First: the invitation email silently never fired when Validation was approved through the actual decision gate — it only worked from the automated-advance path, which this transition doesn't use. Second, and bigger: there was no way for an invited applicant to actually submit a proposal back into the system — 'Invited to Submit Proposal' was a dead end. Applicants now get a secure, one-time link in their invitation email (no account needed) that takes them to a page where they submit a total price and their proposal documents; submitting auto-advances them straight to Proposal Submitted and fires the confirmation email, no staff action needed. Staff can see the submitted price and documents in the case drawer, and the Approvals ranking table now shows price alongside score with a sort toggle between the two. Verified the full database round-trip directly, the public form's validation (blocks empty price, no documents, mid-upload submission), the exact payload sent to the backend, a race condition where the invitation email could fire before its link was actually saved, and the score/price sort order in the rankings table.",
     "2.22.1 (2026-08-10) — The conflict-of-interest declaration only had a tick for \"I have a conflict\" — leaving it blank silently meant 'no conflict', which isn't the same as someone actually confirming that. Replaced with two explicit options, neither selected by default: 'No, I have no conflict' or 'Yes, I have a conflict'. Approving, rejecting, or saving a score is now disabled until one is actively chosen — no more deciding by default. Verified directly: both buttons stay disabled with nothing selected, choosing 'No conflict' unlocks them, and the case still routes to the recusal flow exactly as before if 'Yes' is chosen.",
@@ -1748,10 +1749,14 @@ function exportAudit(){
    ============================================================ */
 async function renderPublic(){
   const now = new Date();
-  const open = rfqs.filter(r=>
-    (r.status==="Open for Applications"||r.status==="Published") &&
-    (!r.close || new Date(r.close) >= now)
-  );
+  const GRACE_DAYS = 20;
+  const open = rfqs.filter(r=>{
+    if(!(r.status==="Open for Applications"||r.status==="Published")) return false;
+    if(!r.close) return true;
+    const closeDate = new Date(r.close);
+    const graceDeadline = new Date(closeDate.getTime() + GRACE_DAYS*86400000);
+    return now <= graceDeadline;
+  });
   // Tender documents live in a private bucket now — fetch a short-lived link
   // for each one before rendering, rather than trusting a stored permanent URL.
   await Promise.all(open.flatMap(r => (r.attachments||[]).map(async f=>{
@@ -1764,10 +1769,13 @@ async function renderPublic(){
   const clarByRfq = {};
   (clarData||[]).forEach(c=>{ (clarByRfq[c.rfq_id] = clarByRfq[c.rfq_id]||[]).push(c); });
 
-  document.getElementById('public-rfq-list').innerHTML = open.length ? open.map(r=>`
+  document.getElementById('public-rfq-list').innerHTML = open.length ? open.map(r=>{
+    const isClosed = r.close && new Date(r.close) < now;
+    return `
     <div class="prfq-card">
-      <h3>${r.title}</h3>
+      <h3>${r.title}${isClosed ? ' <span class="badge" style="background:var(--paper-2); color:var(--ink-3); font-weight:600;">Closed</span>' : ''}</h3>
       <div class="meta">${r.id} · ${r.category} · Closes ${formatCloseDisplay(r.close)}</div>
+      ${isClosed ? `<div style="font-size:12px; color:var(--ink-3); margin:6px 0 10px 0;">This tender has closed and is no longer accepting applications. Questions are still welcome while evaluation is under way.</div>` : ''}
       ${(r.extensionNotices&&r.extensionNotices.length) ? `
         <div style="background:#FCF3DE; border:1px solid var(--gold); border-radius:var(--radius); padding:8px 10px; margin:8px 0 12px 0; font-size:12.5px; color:var(--ink);">
           ${r.extensionNotices.map(n=>`<div style="margin-bottom:4px;"><strong>⏱ Closing date extended</strong> from ${formatCloseDisplay(n.previousDate)} to ${formatCloseDisplay(n.newDate)}. Reason: ${escapeAttr(n.reason)}</div>`).join('')}
@@ -1788,11 +1796,12 @@ async function renderPublic(){
             </div>`).join('')}
         </div>` : ''}
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn gold" onclick="handleApplyClick('${r.id}')">Apply now</button>
+        ${isClosed ? '' : `<button class="btn gold" onclick="handleApplyClick('${r.id}')">Apply now</button>`}
         <button class="btn secondary" onclick="openAskQuestion('${r.id}')">❓ Ask a question</button>
         <button class="btn secondary" onclick="downloadRfqInfo('${r.id}')">⬇ ${(r.attachments&&r.attachments.length) ? (r.attachments.length>1?'Download tender documents':'Download tender document') : 'Download tender information'}</button>
       </div>
-    </div>`).join('') : `<div class="empty-state">No RFQs are currently open for applications.</div>`;
+    </div>`;
+  }).join('') : `<div class="empty-state">No RFQs are currently open for applications.</div>`;
 }
 let askQuestionRfqId = null;
 function openAskQuestion(rfqId){
