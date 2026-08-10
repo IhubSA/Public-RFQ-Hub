@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.25.0",
+  version: "2.25.1",
   date: "2026-08-11",
   changelog: [
+    "2.25.1 (2026-08-11) — The proposal submission page a bidder lands on after being invited now leads with a clear instruction naming the RFQ number and title, telling them plainly to state their full bid amount and upload their scope of works, detailed pricing, and any other supporting documents — this is the one page in the whole system a real bid rides on, so it shouldn't read like a blank form. Adding more than one document was already technically possible but not obvious; the button now relabels itself to \"+ Add another document\" once a file's been added, making it clear multiple uploads are expected.",
     "2.25.0 (2026-08-11) — Closed RFQs used to vanish from the public portal the instant they closed — a real problem, since the invitation email explicitly tells applicants to use the portal's 'Ask a question' option for anything they need to raise. Closed RFQs now stay listed for 20 days after closing, clearly marked 'Closed' with the Apply button removed (applications are still genuinely cut off), while Ask a Question and the tender documents remain available. The question-submission function had the same cutoff and got the same fix, plus a bug fix along the way: it was still comparing against the old date-only format from before closing times existed, so it wasn't as precise as the rest of the system. After 20 days, an RFQ disappears from the public listing as before. Verified directly against the database — still-open, closed 5 days ago, and closed 19 days ago all correctly stay visible; closed 21 days ago correctly disappears.",
     "2.24.0 (2026-08-10) — RFQ closing dates now include a time, not just a day. A bare date was genuinely ambiguous — did it close at midnight, end of business, first thing that morning? The closing-date field (new RFQs, editing, and extensions) is now a real date-and-time picker, and every rule that depends on it — the no-reviews-before-closing lock, the public application cutoff, and public visibility — now compares to the precise minute rather than the calendar day. Existing RFQs default to 23:59:59 on their original date, so nothing changes for them unless edited. Verified directly against the database at minute-level precision: an RFQ closing 5 minutes out stays genuinely locked, and the same RFQ closing 1 minute in the past genuinely unlocks — plus the extend-date flow, the display formatting everywhere a closing time appears, and the full closing-lock regression suite all re-verified against the new precision.",
     "2.23.0 (2026-08-10) — Two real gaps fixed. First: the invitation email silently never fired when Validation was approved through the actual decision gate — it only worked from the automated-advance path, which this transition doesn't use. Second, and bigger: there was no way for an invited applicant to actually submit a proposal back into the system — 'Invited to Submit Proposal' was a dead end. Applicants now get a secure, one-time link in their invitation email (no account needed) that takes them to a page where they submit a total price and their proposal documents; submitting auto-advances them straight to Proposal Submitted and fires the confirmation email, no staff action needed. Staff can see the submitted price and documents in the case drawer, and the Approvals ranking table now shows price alongside score with a sort toggle between the two. Verified the full database round-trip directly, the public form's validation (blocks empty price, no documents, mid-upload submission), the exact payload sent to the backend, a race condition where the invitation email could fire before its link was actually saved, and the score/price sort order in the rankings table.",
@@ -2111,12 +2112,15 @@ async function initProposalSubmitView(token){
     }
     proposalDocState = [];
     bodyEl.innerHTML = `
+      <div style="padding:14px 16px; background:#FCF3DE; border:1px solid var(--gold); border-radius:var(--radius); font-size:13.5px; color:var(--ink); margin-bottom:16px; line-height:1.5;">
+        You have been selected to submit your bid for <strong>RFQ No. ${escapeAttr(data.rfqId)}</strong> — ${escapeAttr(data.rfqTitle)}. Please state the full bid amount and upload all relevant documents, including your scope of works, detailed pricing, and any other documents that support your bid.
+      </div>
       <label>Total price (incl. VAT)</label>
       <input type="number" id="ps-price" min="0" step="0.01" placeholder="e.g. 125000.00">
       <label style="margin-top:12px;">Proposal documents</label>
       <div id="ps-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;">Add a document<input type="file" id="ps-file-input" onchange="handleProposalFile(this)"></label>
-      <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Add your priced quotation and any supporting technical documents. You can add more than one file.</p>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" onchange="handleProposalFile(this)"></label>
+      <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Add your priced quotation, scope of works, and any other supporting documents — use "Add another document" as many times as you need.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitProposalForm()">Submit Proposal</button>
     `;
     renderProposalDocList();
@@ -2133,6 +2137,8 @@ function renderProposalDocList(){
       <span class="fname">${d.uploading ? 'Uploading…' : escapeAttr(d.fileName)}</span>
       <button class="btn small secondary" onclick="removeProposalDoc(${i})" ${d.uploading?'disabled':''}>Remove</button>
     </div>`).join('');
+  const addLabel = document.getElementById('ps-add-doc-label');
+  if(addLabel) addLabel.textContent = proposalDocState.length ? '+ Add another document' : 'Add a document';
 }
 function removeProposalDoc(i){
   proposalDocState.splice(i,1);
