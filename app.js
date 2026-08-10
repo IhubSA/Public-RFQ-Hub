@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.26.2",
+  version: "2.27.0",
   date: "2026-08-11",
   changelog: [
+    "2.27.0 (2026-08-11) — The Scores & ranking panel on Approvals now groups bidders by their RFQ with a clear section header (title, status, bidder count) instead of a flat table where every RFQ's vendors ran together with just a repeated ID column. Each RFQ's bidders now rank and sort within their own section, exactly as they were compared, just far easier to actually read. Bidders who've reached the Recommendation gate now get a 'Select as Preferred Bidder' button right there in the comparison view — it opens the exact same accountable decision modal used everywhere else in the system (name, role, conflict declaration, reason all still required), so choosing a winner while looking at the full comparison doesn't skip any of the sign-off this system is built around. Nothing stops selecting more than one bidder on the same RFQ as Preferred Bidder \u2014 that was already true before this change, just not obvious from the old flat table; each selection is still its own individually accountable decision rather than a bulk tick-and-submit, since a joint-award reason for one vendor is rarely the same as for another. Verified directly: sections render correctly per RFQ, the button only appears at the right stage, an already-selected bidder shows a marker instead of a duplicate button, and clicking through opens the real gate decision with the correct stage and labelling.",
     "2.26.2 (2026-08-11) — The RFQ register kept showing 'Open for Applications' for tenders that had genuinely closed, which read as misleading at a glance. The status badge now shows 'Closed for Applications' once the closing time has passed, in a neutral grey rather than the active gold used for genuinely open tenders. This is display-only by design — the actual stored status stays exactly as it was, since the public portal's visibility rules, the database-level review lock, and the status-change workflow all depend on that real value being untouched. Filtering the register by status still searches the real value too, so nothing else changed underneath. Verified across 8 scenarios: still-open, closed, Published-status closed, and every unrelated status (Draft, Paused, Awarded, Cancelled, no closing date set) all behave exactly as they should, with the underlying stored value confirmed unchanged throughout.",
     "2.26.1 (2026-08-11) — Regret emails were showing a generic, randomly-picked reason from a fixed list ('Mandatory information not supplied', etc.) instead of whatever the reviewer actually typed into the Reason field — meaning the real, specific explanation staff wrote never reached the applicant at all. The Reason field is now what gets sent, word for word, and it's required before a rejection can be recorded — no more silent fallback to a generic line. The field's label now makes clear this text goes straight to the applicant by email, so it's written with that in mind. Verified directly: rejecting with no reason is blocked, the exact typed text is what ends up as the applicant's reason (not a random pick), and this holds across every regret-capable stage.",
     "2.26.0 (2026-08-11) — The public tender listing is now split into two clearly headed sections — Open Tenders and Recently Closed — instead of one flat list. Within Open Tenders, the most recently posted RFQ shows first; within Recently Closed, the one that closed most recently shows first, oldest at the bottom. Verified directly: both section headings appear in the right order, sort order holds within each section, and the layout stays correct whether there are only open RFQs, only recently-closed ones, both, or none at all.",
@@ -1649,8 +1650,8 @@ async function renderRankings(){
   const sortBy = (document.getElementById('rank-sort-by') || {}).value || 'score';
 
   const { data, error } = await sb.from('rfq_evaluations').select('*');
-  const table = document.getElementById('rank-table');
-  if(error){ console.error('rankings load failed', error); table.innerHTML = ''; return; }
+  const container = document.getElementById('rank-table');
+  if(error){ console.error('rankings load failed', error); container.innerHTML = ''; return; }
 
   const rows = (data||[]).map(ev=>{
     const a = applicants.find(x=>x.id===ev.applicant_id);
@@ -1663,30 +1664,43 @@ async function renderRankings(){
   const rfqIds = Object.keys(byRfq).sort();
 
   if(!rfqIds.length){
-    table.innerHTML = `<tr><td style="text-align:center; color:var(--ink-3); padding:20px;">No evaluations recorded yet${filter!=='all'? ' for this RFQ':''}.</td></tr>`;
+    container.innerHTML = `<div style="text-align:center; color:var(--ink-3); padding:20px;">No evaluations recorded yet${filter!=='all'? ' for this RFQ':''}.</div>`;
     return;
   }
 
-  table.innerHTML = `<tr><th>Rank</th><th>RFQ</th><th>Applicant</th><th>Status</th><th>Price</th><th>Score</th><th></th></tr>` +
-    rfqIds.map(rid=>{
-      const group = byRfq[rid].sort((x,y)=>{
-        if(sortBy==='price'){
-          const px = x.a.proposal ? x.a.proposal.totalPrice : Infinity;
-          const py = y.a.proposal ? y.a.proposal.totalPrice : Infinity;
-          return px - py; // lowest price first
-        }
-        return y.ev.total_score - x.ev.total_score; // highest score first
-      });
-      return group.map((r,i)=>`<tr class="rowlink" onclick="openApplicant('${r.a.id}')">
-        <td class="mono">${i===0? '🏆 1' : (i+1)}</td>
-        <td class="ref mono">${escapeAttr(rid)}</td>
-        <td>${escapeAttr(r.a.business)}</td>
-        <td><span class="badge ${appBadgeClass(r.a.status)}">${r.a.status}</span></td>
-        <td class="mono">${r.a.proposal ? escapeAttr(String(r.a.proposal.totalPrice)) : '—'}</td>
-        <td class="mono" style="font-weight:${i===0?'600':'400'};">${r.ev.total_score} / 100</td>
-        <td>${r.ev.conflict_declared? `<span class="badge rust">Conflict declared</span>` : ''}</td>
-      </tr>`).join('');
-    }).join('');
+  container.innerHTML = rfqIds.map(rid=>{
+    const r0 = rfqs.find(x=>x.id===rid);
+    const group = byRfq[rid].sort((x,y)=>{
+      if(sortBy==='price'){
+        const px = x.a.proposal ? x.a.proposal.totalPrice : Infinity;
+        const py = y.a.proposal ? y.a.proposal.totalPrice : Infinity;
+        return px - py; // lowest price first
+      }
+      return y.ev.total_score - x.ev.total_score; // highest score first
+    });
+    return `
+      <div style="padding:14px 16px 4px 16px; border-top:1px solid var(--line); background:var(--paper-2);">
+        <div style="font-weight:600; font-size:13.5px;">${escapeAttr(rid)} — ${escapeAttr(r0 ? r0.title : '')}</div>
+        <div style="font-size:11.5px; color:var(--ink-3); margin-top:2px;">${group.length} evaluated bidder${group.length===1?'':'s'}${r0 ? ' · '+escapeAttr(r0.status) : ''}</div>
+      </div>
+      <table>
+        <tr><th>Rank</th><th>Applicant</th><th>Status</th><th>Price</th><th>Score</th><th></th><th></th></tr>
+        ${group.map((r,i)=>{
+          const isPreferredAlready = KANBAN_STAGES.indexOf(r.a.status) >= KANBAN_STAGES.indexOf('Preferred Bidder');
+          const canSelect = r.a.status === 'Recommendation Recorded' && can('can_evaluate_approve');
+          return `<tr class="rowlink" onclick="openApplicant('${r.a.id}')">
+            <td class="mono">${i===0? '🏆 1' : (i+1)}</td>
+            <td>${escapeAttr(r.a.business)}</td>
+            <td><span class="badge ${appBadgeClass(r.a.status)}">${r.a.status}</span></td>
+            <td class="mono">${r.a.proposal ? escapeAttr(String(r.a.proposal.totalPrice)) : '—'}</td>
+            <td class="mono" style="font-weight:${i===0?'600':'400'};">${r.ev.total_score} / 100</td>
+            <td>${r.ev.conflict_declared? `<span class="badge rust">Conflict declared</span>` : ''}</td>
+            <td>${isPreferredAlready ? `<span style="font-size:11px; color:var(--sage);">✓ Selected</span>` : canSelect ? `<button class="btn small gold" onclick="event.stopPropagation(); requestApproval('${r.a.id}')">Select as Preferred Bidder</button>` : ''}</td>
+          </tr>`;
+        }).join('')}
+      </table>
+    `;
+  }).join('');
 }
 
 /* ============================================================
