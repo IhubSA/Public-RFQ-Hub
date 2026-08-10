@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.5.0 (2026-08-01). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.24.0 (2026-08-10). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -172,6 +172,10 @@
           <div class="desc">Every applicant scored against the same fixed criteria, ranked highest to lowest, so a recommendation points to a number — not a preference.</div>
         </div>
         <select id="rank-filter-rfq" onchange="renderRankings()" style="width:auto; min-width:220px;"><option value="all">All RFQs</option></select>
+        <select id="rank-sort-by" onchange="renderRankings()" style="width:auto; min-width:150px;">
+          <option value="score">Sort by score</option>
+          <option value="price">Sort by price</option>
+        </select>
       </div>
       <div class="panel">
         <div class="panel-body" style="padding:0;">
@@ -295,6 +299,8 @@
     <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin-bottom:8px;">Case details</h3>
     <div id="ad-fields"></div>
 
+    <div id="ad-proposal"></div>
+
     <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Documents submitted</h3>
     <div id="ad-docs"></div>
 
@@ -319,7 +325,7 @@
     <input type="number" id="nr-budget" placeholder="e.g. 450000">
     <div style="display:flex; gap:12px;">
       <div style="flex:1;"><label>Opens</label><input type="date" id="nr-open"></div>
-      <div style="flex:1;"><label>Closes</label><input type="date" id="nr-close"></div>
+      <div style="flex:1;"><label>Closes</label><input type="datetime-local" id="nr-close"></div>
     </div>
     <label>Scope summary</label>
     <textarea id="nr-desc" placeholder="Short public-facing description of what's being procured"></textarea>
@@ -423,7 +429,7 @@
   <div class="modal-body">
     <div id="ext-context" style="font-size:12.5px; color:var(--ink-3); margin-bottom:10px;"></div>
     <label>New closing date</label>
-    <input type="date" id="ext-new-date">
+    <input type="datetime-local" id="ext-new-date">
     <label>Reason for the extension</label>
     <textarea id="ext-reason" placeholder="This will be shown publicly on the tender listing, exactly as written"></textarea>
     <div style="margin-top:10px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius); font-size:12px; color:var(--ink-2);">

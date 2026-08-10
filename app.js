@@ -9,9 +9,11 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.22.1",
+  version: "2.24.0",
   date: "2026-08-10",
   changelog: [
+    "2.24.0 (2026-08-10) — RFQ closing dates now include a time, not just a day. A bare date was genuinely ambiguous — did it close at midnight, end of business, first thing that morning? The closing-date field (new RFQs, editing, and extensions) is now a real date-and-time picker, and every rule that depends on it — the no-reviews-before-closing lock, the public application cutoff, and public visibility — now compares to the precise minute rather than the calendar day. Existing RFQs default to 23:59:59 on their original date, so nothing changes for them unless edited. Verified directly against the database at minute-level precision: an RFQ closing 5 minutes out stays genuinely locked, and the same RFQ closing 1 minute in the past genuinely unlocks — plus the extend-date flow, the display formatting everywhere a closing time appears, and the full closing-lock regression suite all re-verified against the new precision.",
+    "2.23.0 (2026-08-10) — Two real gaps fixed. First: the invitation email silently never fired when Validation was approved through the actual decision gate — it only worked from the automated-advance path, which this transition doesn't use. Second, and bigger: there was no way for an invited applicant to actually submit a proposal back into the system — 'Invited to Submit Proposal' was a dead end. Applicants now get a secure, one-time link in their invitation email (no account needed) that takes them to a page where they submit a total price and their proposal documents; submitting auto-advances them straight to Proposal Submitted and fires the confirmation email, no staff action needed. Staff can see the submitted price and documents in the case drawer, and the Approvals ranking table now shows price alongside score with a sort toggle between the two. Verified the full database round-trip directly, the public form's validation (blocks empty price, no documents, mid-upload submission), the exact payload sent to the backend, a race condition where the invitation email could fire before its link was actually saved, and the score/price sort order in the rankings table.",
     "2.22.1 (2026-08-10) — The conflict-of-interest declaration only had a tick for \"I have a conflict\" — leaving it blank silently meant 'no conflict', which isn't the same as someone actually confirming that. Replaced with two explicit options, neither selected by default: 'No, I have no conflict' or 'Yes, I have a conflict'. Approving, rejecting, or saving a score is now disabled until one is actively chosen — no more deciding by default. Verified directly: both buttons stay disabled with nothing selected, choosing 'No conflict' unlocks them, and the case still routes to the recusal flow exactly as before if 'Yes' is chosen.",
     "2.22.0 (2026-08-10) — The conflict-of-interest declaration on decision gates and evaluations was clearer about what it was for now, but still didn't actually do anything — selecting it was never even read by the code. Fixed: it's now explicit that this is the reviewer's own conflict (not the vendor's), and declaring one genuinely blocks that person from recording the decision or score. Instead, they log a recusal — reason required — to the permanent audit trail, and are told to hand the case to a colleague. Verified directly: approving or saving a score is refused outright while a conflict is checked, a recusal with no reason is rejected, and a valid recusal logs correctly without ever touching the applicant's status or score.",
     "2.21.0 (2026-08-09) — Completed the full set of email notifications from the original 17-step process design. Eight triggers that were either missing or only logged locally now actually send: invitation to submit a proposal, proposal received, signature reminder/escalation, contract signed, and onboarding details — plus the single generic rejection email is now three separate stage-specific ones (screening outcome, validation outcome, approval outcome), each with wording matched to why that particular stage ended the case. Verified all eight fire from the correct action with the correct trigger type, and confirmed real delivery through Resend. Every trigger point from the original design is now wired end to end, aside from 'application incomplete' which has no corresponding action in the system yet.",
@@ -148,6 +150,33 @@ function uniqueId(prefix){
 function escapeAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function today(offsetDays){ const d=new Date(); d.setDate(d.getDate()+(offsetDays||0)); return d.toISOString().slice(0,10); }
 function nowStamp(){ const d=new Date(); return d.toISOString().slice(0,16).replace('T',' '); }
+/* datetime-local inputs work in the browser's own local time — these convert
+   between that and the ISO timestamps stored in the database. */
+function toDatetimeLocalValue(isoString){
+  if(!isoString) return '';
+  const d = new Date(isoString);
+  if(isNaN(d)) return '';
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromDatetimeLocalValue(val){
+  if(!val) return null;
+  const d = new Date(val);
+  return isNaN(d) ? null : d.toISOString();
+}
+function formatCloseDisplay(isoString){
+  if(!isoString) return '—';
+  const d = new Date(isoString);
+  if(isNaN(d)) return isoString;
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function defaultCloseDateTime(offsetDays){
+  const d = new Date();
+  d.setDate(d.getDate() + (offsetDays||0));
+  d.setHours(17,0,0,0); // sensible default: close of business
+  return d.toISOString();
+}
 
 let audit = [];
 function logAudit(action, who, note){
@@ -677,8 +706,8 @@ function renderRfqs(){
   const filtered = rfqs.filter(r=>
     (cat==='all' || r.category===cat) &&
     (stat==='all' || r.status===stat) &&
-    (!dateFrom || !r.close || r.close >= dateFrom) &&
-    (!dateTo || !r.close || r.close <= dateTo)
+    (!dateFrom || !r.close || new Date(r.close) >= new Date(dateFrom)) &&
+    (!dateTo || !r.close || new Date(r.close) < new Date(new Date(dateTo).getTime() + 24*60*60*1000))
   );
   document.getElementById('rfq-table').innerHTML = `
     <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Opens</th><th>Closes</th><th></th></tr>
@@ -688,7 +717,7 @@ function renderRfqs(){
         <span class="badge ${rfqBadgeClass(r.status)}">${r.status}</span>
         ${r.pendingStatusChange ? `<div style="font-size:10.5px; color:var(--ink-3); margin-top:3px;">⏳ Pending: ${escapeAttr(r.pendingStatusChange.targetStatus)}</div>` : ''}
       </td>
-      <td class="mono">${r.open}</td><td class="mono">${r.close}${(r.extensionNotices&&r.extensionNotices.length) ? ` <span title="Extended ${r.extensionNotices.length}x">⏱</span>` : ''}</td>
+      <td class="mono">${r.open}</td><td class="mono">${formatCloseDisplay(r.close)}${(r.extensionNotices&&r.extensionNotices.length) ? ` <span title="Extended ${r.extensionNotices.length}x">⏱</span>` : ''}</td>
       <td style="white-space:nowrap;">
         ${r.status==="Draft" && can('can_manage_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); openEditRfq('${r.id}')">Edit</button>` : ''}
         ${r.status==="Draft" && can('can_publish_rfqs') ? `<button class="btn small gold" onclick="event.stopPropagation(); requestPublishRfq('${r.id}')">Publish</button>` : ''}
@@ -737,7 +766,7 @@ function openEditRfq(id){
   document.getElementById('nr-category').value = r.category||'';
   document.getElementById('nr-budget').value = r.budget||'';
   document.getElementById('nr-open').value = r.open||'';
-  document.getElementById('nr-close').value = r.close||'';
+  document.getElementById('nr-close').value = toDatetimeLocalValue(r.close);
   document.getElementById('nr-desc').value = r.desc||'';
   renderNrDocList();
   renderNrAttachList();
@@ -824,7 +853,7 @@ function createRfq(){
     r.category = document.getElementById('nr-category').value||"General";
     r.budget = Number(document.getElementById('nr-budget').value)||0;
     r.open = document.getElementById('nr-open').value||today();
-    r.close = document.getElementById('nr-close').value||today(21);
+    r.close = fromDatetimeLocalValue(document.getElementById('nr-close').value) || defaultCloseDateTime(21);
     r.desc = document.getElementById('nr-desc').value||"";
     r.requiredDocs = newRfqDocs.slice();
     r.attachments = newRfqAttachments.map(f=>({name:f.name, path:f.path}));
@@ -841,7 +870,7 @@ function createRfq(){
   const id = "RFQ-2026-"+uidCounter;
   const r = {id, title, category:document.getElementById('nr-category').value||"General",
     budget:Number(document.getElementById('nr-budget').value)||0, status:"Draft",
-    open:document.getElementById('nr-open').value||today(), close:document.getElementById('nr-close').value||today(21),
+    open:document.getElementById('nr-open').value||today(), close:fromDatetimeLocalValue(document.getElementById('nr-close').value) || defaultCloseDateTime(21),
     desc:document.getElementById('nr-desc').value||"", requiredDocs:newRfqDocs.slice(),
     attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path}))};
   rfqs.unshift(r);
@@ -1005,7 +1034,36 @@ function submitEvalRecusal(){
 function rfqIsClosed(rfqId){
   const r = rfqs.find(x=>x.id===rfqId);
   if(!r || !r.close) return false;
-  return r.close < today();
+  const d = new Date(r.close);
+  return !isNaN(d) && d < new Date();
+}
+
+function renderProposalSection(a){
+  const el = document.getElementById('ad-proposal');
+  if(!el) return;
+  if(!a.proposal){
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = `
+    <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Submitted proposal</h3>
+    <div class="field-row"><span class="k">Total price</span><span class="mono" style="font-weight:600;">${escapeAttr(String(a.proposal.totalPrice))}</span></div>
+    <div class="field-row"><span class="k">Submitted</span><span class="mono">${(a.proposal.submittedAt||'').slice(0,10)}</span></div>
+    <div id="ad-proposal-docs" style="margin-top:6px;"><span style="font-size:12px; color:var(--ink-3);">Loading document links…</span></div>
+  `;
+  const docs = a.proposal.documents || [];
+  Promise.all(docs.map(async d=>{
+    try{
+      const { data, error } = await sb.storage.from('applicant-documents').createSignedUrl(d.path, 600);
+      return { name:d.fileName, url: (!error && data) ? data.signedUrl : null };
+    } catch(e){ console.error('signed url failed for proposal doc', d.path, e); return { name:d.fileName, url:null }; }
+  })).then(resolved=>{
+    const docsEl = document.getElementById('ad-proposal-docs');
+    if(!docsEl) return;
+    docsEl.innerHTML = resolved.length ? resolved.map(d=>
+      d.url ? `<div><a href="${d.url}" target="_blank" rel="noopener">${escapeAttr(d.name)}</a></div>` : `<div>${escapeAttr(d.name)} <span style="color:var(--ink-3); font-size:11px;">(link unavailable)</span></div>`
+    ).join('') : `<span style="font-size:12px; color:var(--ink-3);">No documents.</span>`;
+  });
 }
 
 async function openApplicant(id){
@@ -1025,6 +1083,8 @@ async function openApplicant(id){
     <div class="field-row"><span class="k">Reference</span><span class="mono">${a.id}</span></div>
     ${a.comments ? `<div class="field-row" style="display:block;"><span class="k">Comments / questions</span><div style="margin-top:4px; font-size:12.5px; color:var(--ink); background:var(--paper-2); border-radius:var(--radius); padding:8px 10px;">${escapeAttr(a.comments)}</div></div>` : ''}
   `;
+
+  renderProposalSection(a);
 
   const docs = a.documents || [];
   document.getElementById('applicant-drawer').classList.add('active');
@@ -1063,7 +1123,7 @@ async function openApplicant(id){
               <div class="dc-meta">${escapeAttr(c.author)}${c.date? ' · '+escapeAttr(c.date):''}</div>
             </div>`).join('') || `<div class="dc-empty">No comments yet.</div>`}
           <div class="doc-comment-add">
-            ${!rfqIsClosed(a.rfq) ? `<span style="font-size:11px; color:var(--ink-3);">This RFQ closes ${rfqs.find(x=>x.id===a.rfq)?.close||''} — reviews and comments can't begin until then.</span>` :
+            ${!rfqIsClosed(a.rfq) ? `<span style="font-size:11px; color:var(--ink-3);">This RFQ closes ${formatCloseDisplay(rfqs.find(x=>x.id===a.rfq)?.close)} — reviews and comments can't begin until then.</span>` :
               can('can_review_documents') ? `
               <input type="text" class="doc-comment-input" id="new-comment-${d.docId}" placeholder="Add a review comment…" onkeydown="if(event.key==='Enter'){addDocComment('${a.id}','${d.docId}');}">
               <button class="btn small secondary" onclick="addDocComment('${a.id}','${d.docId}')">Add Comment</button>
@@ -1077,7 +1137,7 @@ async function openApplicant(id){
   const canAny = can('can_screen_validate') || can('can_evaluate_approve') || can('can_manage_contracts') || can('can_review_documents');
 
   if(a.status!=="Unsuccessful" && a.status!=="Closed" && !rfqIsClosed(a.rfq)){
-    const closeDate = rfqs.find(x=>x.id===a.rfq)?.close || 'its closing date';
+    const closeDate = formatCloseDisplay(rfqs.find(x=>x.id===a.rfq)?.close) || 'its closing date';
     actionsEl.innerHTML = `<div style="font-size:12px; color:var(--ink-2); background:var(--paper-2); border-radius:var(--radius); padding:10px 12px; width:100%;">⏳ This RFQ is still open for applications until <strong>${closeDate}</strong>. No reviews, decisions, or scoring can happen on any applicant until it closes — this keeps the process fair to everyone still applying.</div>`;
   } else if(a.status==="Unsuccessful"||a.status==="Closed"){
     actionsEl.innerHTML = `<span style="font-size:12px;color:var(--ink-3);">Case closed — no further stage changes.</span>`;
@@ -1158,11 +1218,13 @@ async function addDocComment(applicantId, docId){
 }
 
 /* Persists an applicant's current status/reason plus one new timeline row. */
-function persistApplicantChange(a, timelineEntry){
-  sb.from('rfq_applicants').update({status:a.status, reason:a.reason||null}).eq('id', a.id)
-    .then(({error})=>{ if(error){ console.error('applicant status persist failed', error); toast("Not saved to database", `${a.business}'s status changed locally but failed to save — check the console.`); } });
+function persistApplicantChange(a, timelineEntry, extraFields){
+  const payload = Object.assign({status:a.status, reason:a.reason||null}, extraFields||{});
+  const updatePromise = sb.from('rfq_applicants').update(payload).eq('id', a.id)
+    .then(({error})=>{ if(error){ console.error('applicant status persist failed', error); toast("Not saved to database", `${a.business}'s status changed locally but failed to save — check the console.`); } return {error}; });
   sb.from('rfq_timeline_events').insert({applicant_id:a.id, event_date:timelineEntry.date, action:timelineEntry.action, actor:timelineEntry.actor, note:timelineEntry.note||null})
     .then(({error})=>{ if(error) console.error('timeline persist failed', error); });
+  return updatePromise;
 }
 
 /* Automated / system-step advance — no decision modal, matches the diagram's
@@ -1355,9 +1417,9 @@ function openExtendDate(rfqId){
   const r = rfqs.find(x=>x.id===rfqId);
   if(!r) return;
   extendingRfqId = rfqId;
-  document.getElementById('ext-context').textContent = `${r.id} — ${r.title} — currently closes ${r.close}`;
+  document.getElementById('ext-context').textContent = `${r.id} — ${r.title} — currently closes ${formatCloseDisplay(r.close)}`;
   document.getElementById('ext-new-date').value = '';
-  document.getElementById('ext-new-date').min = r.close;
+  document.getElementById('ext-new-date').min = toDatetimeLocalValue(r.close);
   document.getElementById('ext-reason').value = '';
   document.getElementById('modal-extend-date').classList.add('active');
   document.getElementById('overlay').classList.add('active');
@@ -1365,20 +1427,21 @@ function openExtendDate(rfqId){
 function submitExtendDate(){
   const r = rfqs.find(x=>x.id===extendingRfqId);
   if(!r) return;
-  const newDate = document.getElementById('ext-new-date').value;
+  const newDateRaw = document.getElementById('ext-new-date').value;
   const reason = document.getElementById('ext-reason').value.trim();
-  if(!newDate){ toast("New date required", "Please choose the new closing date."); return; }
-  if(newDate <= r.close){ toast("Date must be later", `The new date must be after the current closing date (${r.close}).`); return; }
+  if(!newDateRaw){ toast("New date required", "Please choose the new closing date and time."); return; }
+  const newDate = fromDatetimeLocalValue(newDateRaw);
+  if(!newDate || new Date(newDate) <= new Date(r.close)){ toast("Date must be later", `The new closing date and time must be after the current one (${formatCloseDisplay(r.close)}).`); return; }
   if(!reason){ toast("Reason required", "Please explain why the closing date is being extended — this is shown publicly."); return; }
 
   const notice = { previousDate:r.close, newDate, reason, extendedBy:(currentEmployee&&currentEmployee.email)||'Unknown', extendedAt:new Date().toISOString() };
   const previousClose = r.close;
   r.extensionNotices = [...(r.extensionNotices||[]), notice];
   r.close = newDate;
-  logAudit(`${r.id} closing date extended from ${previousClose} to ${newDate}`, (currentEmployee&&currentEmployee.email)||'Unknown', reason);
+  logAudit(`${r.id} closing date extended from ${formatCloseDisplay(previousClose)} to ${formatCloseDisplay(newDate)}`, (currentEmployee&&currentEmployee.email)||'Unknown', reason);
   closeAll();
   renderRfqs();
-  toast("Closing date extended", `${r.id} now closes ${newDate}. A public notice has been published.`);
+  toast("Closing date extended", `${r.id} now closes ${formatCloseDisplay(newDate)}. A public notice has been published.`);
   sb.from('rfq_rfqs').update({close_date:r.close, extension_notices:r.extensionNotices}).eq('id', r.id)
     .then(({error})=>{ if(error){ console.error('extend date persist failed', error); toast("Not saved to database", "The change shows locally but failed to save — check the console."); } });
 }
@@ -1459,7 +1522,12 @@ async function submitClarificationAnswer(){
   }
 }
 
-function submitApproval(isApprove){
+function generateSecureToken(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g,'');
+  return Array.from({length:32}, ()=>Math.floor(Math.random()*16).toString(16)).join('');
+}
+
+async function submitApproval(isApprove){
   if(!document.getElementById('ap-coi-none').checked){ toast("Can't proceed", "Please confirm you have no conflict of interest before recording this decision."); return; }
   const name = document.getElementById('ap-name').value.trim() || "Unnamed reviewer";
   const role = document.getElementById('ap-role').value.trim() || "Authorised reviewer";
@@ -1486,10 +1554,17 @@ function submitApproval(isApprove){
       a.status = pendingAction.nextStage;
       const entry = {date:today(), action:`Advanced to ${pendingAction.nextStage}`, actor:`${name} (${role})`};
       a.timeline.push(entry);
-      persistApplicantChange(a, entry);
+      const isInvitation = pendingAction.nextStage === 'Invited to Submit Proposal';
+      const extraFields = {};
+      if(isInvitation){
+        a.proposalToken = generateSecureToken();
+        extraFields.proposal_token = a.proposalToken;
+      }
+      await persistApplicantChange(a, entry, extraFields);
       logAudit(`${a.business} advanced to ${pendingAction.nextStage}`, `${name} · ${role}`, comment);
       toast("Decision recorded", `${a.business} is now ${pendingAction.nextStage}.`);
       if(pendingAction.nextStage === 'Preferred Bidder') triggerEmail('preferred_bidder', a.id);
+      if(isInvitation) triggerEmail('invitation_to_submit', a.id);
     } else {
       const originStage = a.status;
       const pool = REGRET_POOLS[originStage] || ["Did not proceed"];
@@ -1549,6 +1624,7 @@ async function renderRankings(){
   filterSel.innerHTML = `<option value="all">All RFQs</option>` + rfqs.map(r=>`<option value="${r.id}">${r.id} — ${r.title}</option>`).join('');
   if(rfqs.some(r=>r.id===curFilter)) filterSel.value = curFilter;
   const filter = filterSel.value || 'all';
+  const sortBy = (document.getElementById('rank-sort-by') || {}).value || 'score';
 
   const { data, error } = await sb.from('rfq_evaluations').select('*');
   const table = document.getElementById('rank-table');
@@ -1569,14 +1645,22 @@ async function renderRankings(){
     return;
   }
 
-  table.innerHTML = `<tr><th>Rank</th><th>RFQ</th><th>Applicant</th><th>Status</th><th>Score</th><th></th></tr>` +
+  table.innerHTML = `<tr><th>Rank</th><th>RFQ</th><th>Applicant</th><th>Status</th><th>Price</th><th>Score</th><th></th></tr>` +
     rfqIds.map(rid=>{
-      const group = byRfq[rid].sort((x,y)=>y.ev.total_score - x.ev.total_score);
+      const group = byRfq[rid].sort((x,y)=>{
+        if(sortBy==='price'){
+          const px = x.a.proposal ? x.a.proposal.totalPrice : Infinity;
+          const py = y.a.proposal ? y.a.proposal.totalPrice : Infinity;
+          return px - py; // lowest price first
+        }
+        return y.ev.total_score - x.ev.total_score; // highest score first
+      });
       return group.map((r,i)=>`<tr class="rowlink" onclick="openApplicant('${r.a.id}')">
         <td class="mono">${i===0? '🏆 1' : (i+1)}</td>
         <td class="ref mono">${escapeAttr(rid)}</td>
         <td>${escapeAttr(r.a.business)}</td>
         <td><span class="badge ${appBadgeClass(r.a.status)}">${r.a.status}</span></td>
+        <td class="mono">${r.a.proposal ? escapeAttr(String(r.a.proposal.totalPrice)) : '—'}</td>
         <td class="mono" style="font-weight:${i===0?'600':'400'};">${r.ev.total_score} / 100</td>
         <td>${r.ev.conflict_declared? `<span class="badge rust">Conflict declared</span>` : ''}</td>
       </tr>`).join('');
@@ -1663,10 +1747,10 @@ function exportAudit(){
    PUBLIC PORTAL
    ============================================================ */
 async function renderPublic(){
-  const todayStr = today();
+  const now = new Date();
   const open = rfqs.filter(r=>
     (r.status==="Open for Applications"||r.status==="Published") &&
-    (!r.close || r.close >= todayStr)
+    (!r.close || new Date(r.close) >= now)
   );
   // Tender documents live in a private bucket now — fetch a short-lived link
   // for each one before rendering, rather than trusting a stored permanent URL.
@@ -1683,10 +1767,10 @@ async function renderPublic(){
   document.getElementById('public-rfq-list').innerHTML = open.length ? open.map(r=>`
     <div class="prfq-card">
       <h3>${r.title}</h3>
-      <div class="meta">${r.id} · ${r.category} · Closes ${r.close}</div>
+      <div class="meta">${r.id} · ${r.category} · Closes ${formatCloseDisplay(r.close)}</div>
       ${(r.extensionNotices&&r.extensionNotices.length) ? `
         <div style="background:#FCF3DE; border:1px solid var(--gold); border-radius:var(--radius); padding:8px 10px; margin:8px 0 12px 0; font-size:12.5px; color:var(--ink);">
-          ${r.extensionNotices.map(n=>`<div style="margin-bottom:4px;"><strong>⏱ Closing date extended</strong> from ${n.previousDate} to ${n.newDate}. Reason: ${escapeAttr(n.reason)}</div>`).join('')}
+          ${r.extensionNotices.map(n=>`<div style="margin-bottom:4px;"><strong>⏱ Closing date extended</strong> from ${formatCloseDisplay(n.previousDate)} to ${formatCloseDisplay(n.newDate)}. Reason: ${escapeAttr(n.reason)}</div>`).join('')}
         </div>` : ''}
       <div class="desc">${r.desc}</div>
       ${(r.attachments&&r.attachments.length) ? `
@@ -1767,7 +1851,7 @@ async function downloadRfqInfo(rfqId){
     `Category: ${r.category}`,
     `Estimated budget: ${zar(r.budget)}`,
     `Opens: ${r.open}`,
-    `Closes: ${r.close}`,
+    `Closes: ${formatCloseDisplay(r.close)}`,
     '',
     'Scope summary:',
     r.desc || '(none provided)',
@@ -1854,8 +1938,8 @@ function submitApplication(){
   const comments = document.getElementById('apply-comments').value.trim();
 
   const targetRfq = rfqs.find(r=>r.id===applyingTo);
-  if(targetRfq && targetRfq.close && targetRfq.close < today()){
-    toast("This RFQ has closed", `Applications for ${targetRfq.title} closed on ${targetRfq.close}.`, 20000);
+  if(targetRfq && targetRfq.close && new Date(targetRfq.close) < new Date()){
+    toast("This RFQ has closed", `Applications for ${targetRfq.title} closed on ${formatCloseDisplay(targetRfq.close)}.`, 20000);
     closeAll();
     renderPublic();
     return;
@@ -1966,6 +2050,12 @@ function applyPermissionUI(){
 }
 
 async function initPublicPage(){
+  const submitToken = new URLSearchParams(location.search).get('submit');
+  if(submitToken){
+    document.getElementById('public-view').style.display = 'none';
+    document.getElementById('proposal-submit-view').style.display = 'block';
+    return initProposalSubmitView(submitToken);
+  }
   try{
     await loadPublicData();
   } catch(e){
@@ -1975,6 +2065,124 @@ async function initPublicPage(){
   }
   renderPublic();
   updatePublicTopbar();
+}
+
+/* ============================================================
+   PROPOSAL SUBMISSION — the secure-link page an invited applicant
+   lands on to actually submit their priced proposal.
+   ============================================================ */
+let proposalToken = null;
+let proposalDocState = [];
+
+async function initProposalSubmitView(token){
+  proposalToken = token;
+  const contextEl = document.getElementById('ps-context');
+  const bodyEl = document.getElementById('ps-body');
+  try{
+    const { data, error } = await sb.functions.invoke('submit-proposal', { body: { action:'lookup', token } });
+    if(error || !data || data.error || !data.success){
+      contextEl.textContent = '';
+      bodyEl.innerHTML = `<div style="padding:16px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); color:var(--rust);">${escapeAttr((data&&data.error)||'This link is invalid or has expired. Please contact the procurement team if you believe this is a mistake.')}</div>`;
+      return;
+    }
+    contextEl.textContent = `${data.business} — ${data.rfqTitle} (${data.rfqId})`;
+    if(data.alreadySubmitted){
+      const p = data.proposal;
+      bodyEl.innerHTML = `
+        <div style="padding:16px; background:var(--paper-2); border-radius:var(--radius);">
+          <strong>A proposal has already been submitted for this application.</strong>
+          ${p ? `<div style="margin-top:10px; font-size:13px; color:var(--ink-2);">
+            <div>Total price: <strong>${escapeAttr(String(p.totalPrice))}</strong></div>
+            <div>Documents: ${(p.documents||[]).map(d=>escapeAttr(d.fileName)).join(', ')||'—'}</div>
+            <div>Submitted: ${(p.submittedAt||'').slice(0,10)}</div>
+          </div>` : ''}
+          <p style="margin-top:10px; font-size:13px; color:var(--ink-2);">If you need to make a change, please contact the procurement team directly.</p>
+        </div>`;
+      return;
+    }
+    proposalDocState = [];
+    bodyEl.innerHTML = `
+      <label>Total price (incl. VAT)</label>
+      <input type="number" id="ps-price" min="0" step="0.01" placeholder="e.g. 125000.00">
+      <label style="margin-top:12px;">Proposal documents</label>
+      <div id="ps-doc-list"></div>
+      <label class="upload-btn" style="margin-top:6px;">Add a document<input type="file" id="ps-file-input" onchange="handleProposalFile(this)"></label>
+      <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Add your priced quotation and any supporting technical documents. You can add more than one file.</p>
+      <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitProposalForm()">Submit Proposal</button>
+    `;
+    renderProposalDocList();
+  } catch(e){
+    console.error('proposal lookup failed', e);
+    bodyEl.innerHTML = `<div style="padding:16px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); color:var(--rust);">Couldn't load this page — check your connection and try again.</div>`;
+  }
+}
+function renderProposalDocList(){
+  const el = document.getElementById('ps-doc-list');
+  if(!el) return;
+  el.innerHTML = proposalDocState.map((d,i)=>`
+    <div class="field-row" style="align-items:center;">
+      <span class="fname">${d.uploading ? 'Uploading…' : escapeAttr(d.fileName)}</span>
+      <button class="btn small secondary" onclick="removeProposalDoc(${i})" ${d.uploading?'disabled':''}>Remove</button>
+    </div>`).join('');
+}
+function removeProposalDoc(i){
+  proposalDocState.splice(i,1);
+  renderProposalDocList();
+}
+async function handleProposalFile(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  input.value = '';
+  const idx = proposalDocState.length;
+  proposalDocState.push({fileName:file.name, filePath:null, uploading:true});
+  renderProposalDocList();
+
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `proposals/${proposalToken}/${Date.now()}_${safeName}`;
+  try{
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('path', path);
+    const { data, error } = await sb.functions.invoke('upload-document', { body: formData });
+    if(error){
+      let message = error.message;
+      if(error.context && typeof error.context.json === 'function'){
+        try{ const body = await error.context.json(); message = body.error || message; } catch(e2){ /* ignore */ }
+      }
+      throw new Error(message);
+    }
+    if(data && data.error) throw new Error(data.error);
+    proposalDocState[idx].filePath = path;
+  } catch(e){
+    console.error('proposal document upload failed', e);
+    toast("Upload failed", `Could not upload ${file.name} — please try again.`);
+    proposalDocState.splice(idx,1);
+  }
+  proposalDocState[idx] && (proposalDocState[idx].uploading = false);
+  renderProposalDocList();
+}
+async function submitProposalForm(){
+  const price = Number(document.getElementById('ps-price').value);
+  if(!price || price <= 0){ toast("Total price required", "Please enter a valid total price."); return; }
+  if(proposalDocState.some(d=>d.uploading)){ toast("Still uploading", "Please wait for your document(s) to finish uploading."); return; }
+  const documents = proposalDocState.filter(d=>d.filePath).map(d=>({fileName:d.fileName, path:d.filePath}));
+  if(documents.length === 0){ toast("Document required", "Please add at least one proposal document."); return; }
+
+  try{
+    const { data, error } = await sb.functions.invoke('submit-proposal', { body: { action:'submit', token:proposalToken, totalPrice:price, documents } });
+    if(error || !data || data.error || !data.success){
+      toast("Couldn't submit", (data&&data.error) || "Something went wrong — please try again.");
+      return;
+    }
+    document.getElementById('ps-body').innerHTML = `
+      <div style="padding:16px; background:#EAF3EC; border:1px solid var(--sage); border-radius:var(--radius); color:var(--sage);">
+        <strong>Your proposal has been submitted.</strong>
+        <p style="margin-top:8px; font-size:13px;">A confirmation email is on its way. Our team will be in touch once evaluation is complete.</p>
+      </div>`;
+  } catch(e){
+    console.error('proposal submit failed', e);
+    toast("Couldn't submit", "Something went wrong — please try again.");
+  }
 }
 
 /* Anonymous/public bootstrap — RLS itself restricts this to open/published RFQs only. */
@@ -2241,6 +2449,6 @@ async function loadFromSupabase(){
   });
 
   rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[]}));
-  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || []}));
+  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
 }
