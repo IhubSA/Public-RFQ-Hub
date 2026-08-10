@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.25.2",
+  version: "2.26.0",
   date: "2026-08-11",
   changelog: [
+    "2.26.0 (2026-08-11) — The public tender listing is now split into two clearly headed sections — Open Tenders and Recently Closed — instead of one flat list. Within Open Tenders, the most recently posted RFQ shows first; within Recently Closed, the one that closed most recently shows first, oldest at the bottom. Verified directly: both section headings appear in the right order, sort order holds within each section, and the layout stays correct whether there are only open RFQs, only recently-closed ones, both, or none at all.",
     "2.25.2 (2026-08-11) — An 'Evaluate this applicant' button was showing at every stage from Under Evaluation all the way through Contract Signed and beyond, with no upper bound — meaning it appeared at Preferred Bidder and Contract Being Drafted too, stages that should already have a locked-in score behind them, not an open invitation to score for the first time. Evaluating (and re-evaluating) is now only possible in the window it actually belongs to: from Under Evaluation up to the Recommendation gate. Past that point, an existing score still shows as a read-only historical record, but the action to create or change one is gone — and if a case reached those later stages without ever being scored, the section now stays empty instead of showing a button that shouldn't be there. Verified all 8 combinations directly: with and without an existing score, at every relevant stage from Under Evaluation through Contract Being Drafted.",
     "2.25.1 (2026-08-11) — The proposal submission page a bidder lands on after being invited now leads with a clear instruction naming the RFQ number and title, telling them plainly to state their full bid amount and upload their scope of works, detailed pricing, and any other supporting documents — this is the one page in the whole system a real bid rides on, so it shouldn't read like a blank form. Adding more than one document was already technically possible but not obvious; the button now relabels itself to \"+ Add another document\" once a file's been added, making it clear multiple uploads are expected.",
     "2.25.0 (2026-08-11) — Closed RFQs used to vanish from the public portal the instant they closed — a real problem, since the invitation email explicitly tells applicants to use the portal's 'Ask a question' option for anything they need to raise. Closed RFQs now stay listed for 20 days after closing, clearly marked 'Closed' with the Apply button removed (applications are still genuinely cut off), while Ask a Question and the tender documents remain available. The question-submission function had the same cutoff and got the same fix, plus a bug fix along the way: it was still comparing against the old date-only format from before closing times existed, so it wasn't as precise as the rest of the system. After 20 days, an RFQ disappears from the public listing as before. Verified directly against the database — still-open, closed 5 days ago, and closed 19 days ago all correctly stay visible; closed 21 days ago correctly disappears.",
@@ -1758,7 +1759,7 @@ function exportAudit(){
 async function renderPublic(){
   const now = new Date();
   const GRACE_DAYS = 20;
-  const open = rfqs.filter(r=>{
+  const visible = rfqs.filter(r=>{
     if(!(r.status==="Open for Applications"||r.status==="Published")) return false;
     if(!r.close) return true;
     const closeDate = new Date(r.close);
@@ -1767,7 +1768,7 @@ async function renderPublic(){
   });
   // Tender documents live in a private bucket now — fetch a short-lived link
   // for each one before rendering, rather than trusting a stored permanent URL.
-  await Promise.all(open.flatMap(r => (r.attachments||[]).map(async f=>{
+  await Promise.all(visible.flatMap(r => (r.attachments||[]).map(async f=>{
     if(!f.path) return;
     const { data, error } = await sb.storage.from('rfq-documents').createSignedUrl(f.path, 600);
     f._signedUrl = error ? null : data.signedUrl;
@@ -1777,7 +1778,12 @@ async function renderPublic(){
   const clarByRfq = {};
   (clarData||[]).forEach(c=>{ (clarByRfq[c.rfq_id] = clarByRfq[c.rfq_id]||[]).push(c); });
 
-  document.getElementById('public-rfq-list').innerHTML = open.length ? open.map(r=>{
+  const stillOpen = visible.filter(r => !(r.close && new Date(r.close) < now))
+    .sort((a,b) => new Date(b.open||0) - new Date(a.open||0)); // newest posted first
+  const closedRecent = visible.filter(r => r.close && new Date(r.close) < now)
+    .sort((a,b) => new Date(b.close) - new Date(a.close)); // most recently closed first
+
+  function renderCard(r){
     const isClosed = r.close && new Date(r.close) < now;
     return `
     <div class="prfq-card">
@@ -1809,7 +1815,22 @@ async function renderPublic(){
         <button class="btn secondary" onclick="downloadRfqInfo('${r.id}')">⬇ ${(r.attachments&&r.attachments.length) ? (r.attachments.length>1?'Download tender documents':'Download tender document') : 'Download tender information'}</button>
       </div>
     </div>`;
-  }).join('') : `<div class="empty-state">No RFQs are currently open for applications.</div>`;
+  }
+
+  if(!visible.length){
+    document.getElementById('public-rfq-list').innerHTML = `<div class="empty-state">No RFQs are currently open for applications.</div>`;
+    return;
+  }
+  document.getElementById('public-rfq-list').innerHTML = `
+    ${stillOpen.length ? `
+      <h2 class="public-section-heading">Open Tenders</h2>
+      ${stillOpen.map(renderCard).join('')}
+    ` : ''}
+    ${closedRecent.length ? `
+      <h2 class="public-section-heading" style="margin-top:28px;">Recently Closed</h2>
+      ${closedRecent.map(renderCard).join('')}
+    ` : ''}
+  `;
 }
 let askQuestionRfqId = null;
 function openAskQuestion(rfqId){
