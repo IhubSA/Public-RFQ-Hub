@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.27.0",
+  version: "2.27.1",
   date: "2026-08-11",
   changelog: [
+    "2.27.1 (2026-08-11) — A genuinely serious one: the admin console treated an empty RFQ table as \"this must be a fresh install\" and automatically wrote the built-in demo dataset back into the live database on load. That logic made sense back when this system had never been used for anything real, but it directly undid a deliberate, requested data reset the moment anyone next opened the admin console — with only an easy-to-miss footer note as any indication it had happened. An empty database is now simply treated as empty, exactly as entered, with no silent repopulation under any circumstance. Verified directly: loading against a database with zero RFQs results in zero RFQs shown, zero write attempts back to the database, and no seeding claim in the footer.",
     "2.27.0 (2026-08-11) — The Scores & ranking panel on Approvals now groups bidders by their RFQ with a clear section header (title, status, bidder count) instead of a flat table where every RFQ's vendors ran together with just a repeated ID column. Each RFQ's bidders now rank and sort within their own section, exactly as they were compared, just far easier to actually read. Bidders who've reached the Recommendation gate now get a 'Select as Preferred Bidder' button right there in the comparison view — it opens the exact same accountable decision modal used everywhere else in the system (name, role, conflict declaration, reason all still required), so choosing a winner while looking at the full comparison doesn't skip any of the sign-off this system is built around. Nothing stops selecting more than one bidder on the same RFQ as Preferred Bidder \u2014 that was already true before this change, just not obvious from the old flat table; each selection is still its own individually accountable decision rather than a bulk tick-and-submit, since a joint-award reason for one vendor is rarely the same as for another. Verified directly: sections render correctly per RFQ, the button only appears at the right stage, an already-selected bidder shows a marker instead of a duplicate button, and clicking through opens the real gate decision with the correct stage and labelling.",
     "2.26.2 (2026-08-11) — The RFQ register kept showing 'Open for Applications' for tenders that had genuinely closed, which read as misleading at a glance. The status badge now shows 'Closed for Applications' once the closing time has passed, in a neutral grey rather than the active gold used for genuinely open tenders. This is display-only by design — the actual stored status stays exactly as it was, since the public portal's visibility rules, the database-level review lock, and the status-change workflow all depend on that real value being untouched. Filtering the register by status still searches the real value too, so nothing else changed underneath. Verified across 8 scenarios: still-open, closed, Published-status closed, and every unrelated status (Draft, Paused, Awarded, Cancelled, no closing date set) all behave exactly as they should, with the underlying stored value confirmed unchanged throughout.",
     "2.26.1 (2026-08-11) — Regret emails were showing a generic, randomly-picked reason from a fixed list ('Mandatory information not supplied', etc.) instead of whatever the reviewer actually typed into the Reason field — meaning the real, specific explanation staff wrote never reached the applicant at all. The Reason field is now what gets sent, word for word, and it's required before a rejection can be recorded — no more silent fallback to a generic line. The field's label now makes clear this text goes straight to the applicant by email, so it's written with that in mind. Verified directly: rejecting with no reason is blocked, the exact typed text is what ends up as the applicant's reason (not a random pick), and this holds across every regret-capable stage.",
@@ -2265,18 +2266,8 @@ async function loadPublicData(){
 async function loadAdminData(){
   const footEl = document.getElementById('sidebar-foot');
   try{
-    const { count, error: countErr } = await sb.from('rfq_rfqs').select('id', {count:'exact', head:true});
-    if(countErr) throw countErr;
-
-    if(!count){
-      // Fresh database — build the local demo dataset, then push it up.
-      seed();
-      await pushSeedToSupabase();
-      if(footEl) footEl.innerHTML = '🟢 Connected to Supabase — database just seeded with demo data.';
-    } else {
-      await loadFromSupabase();
-      if(footEl) footEl.innerHTML = `🟢 Connected to Supabase — live data (${rfqs.length} RFQs, ${applicants.length} applicants).`;
-    }
+    await loadFromSupabase();
+    if(footEl) footEl.innerHTML = `🟢 Connected to Supabase — live data (${rfqs.length} RFQs, ${applicants.length} applicants).`;
     await loadEmployeesAndPermissions();
   } catch(e){
     console.error('Supabase unavailable, showing local demo data only', e);
