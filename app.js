@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.26.1",
+  version: "2.26.2",
   date: "2026-08-11",
   changelog: [
+    "2.26.2 (2026-08-11) — The RFQ register kept showing 'Open for Applications' for tenders that had genuinely closed, which read as misleading at a glance. The status badge now shows 'Closed for Applications' once the closing time has passed, in a neutral grey rather than the active gold used for genuinely open tenders. This is display-only by design — the actual stored status stays exactly as it was, since the public portal's visibility rules, the database-level review lock, and the status-change workflow all depend on that real value being untouched. Filtering the register by status still searches the real value too, so nothing else changed underneath. Verified across 8 scenarios: still-open, closed, Published-status closed, and every unrelated status (Draft, Paused, Awarded, Cancelled, no closing date set) all behave exactly as they should, with the underlying stored value confirmed unchanged throughout.",
     "2.26.1 (2026-08-11) — Regret emails were showing a generic, randomly-picked reason from a fixed list ('Mandatory information not supplied', etc.) instead of whatever the reviewer actually typed into the Reason field — meaning the real, specific explanation staff wrote never reached the applicant at all. The Reason field is now what gets sent, word for word, and it's required before a rejection can be recorded — no more silent fallback to a generic line. The field's label now makes clear this text goes straight to the applicant by email, so it's written with that in mind. Verified directly: rejecting with no reason is blocked, the exact typed text is what ends up as the applicant's reason (not a random pick), and this holds across every regret-capable stage.",
     "2.26.0 (2026-08-11) — The public tender listing is now split into two clearly headed sections — Open Tenders and Recently Closed — instead of one flat list. Within Open Tenders, the most recently posted RFQ shows first; within Recently Closed, the one that closed most recently shows first, oldest at the bottom. Verified directly: both section headings appear in the right order, sort order holds within each section, and the layout stays correct whether there are only open RFQs, only recently-closed ones, both, or none at all.",
     "2.25.2 (2026-08-11) — An 'Evaluate this applicant' button was showing at every stage from Under Evaluation all the way through Contract Signed and beyond, with no upper bound — meaning it appeared at Preferred Bidder and Contract Being Drafted too, stages that should already have a locked-in score behind them, not an open invitation to score for the first time. Evaluating (and re-evaluating) is now only possible in the window it actually belongs to: from Under Evaluation up to the Recommendation gate. Past that point, an existing score still shows as a read-only historical record, but the action to create or change one is gone — and if a case reached those later stages without ever being scored, the section now stays empty instead of showing a button that shouldn't be there. Verified all 8 combinations directly: with and without an existing score, at every relevant stage from Under Evaluation through Contract Being Drafted.",
@@ -518,7 +519,17 @@ function rfqBadgeClass(s){
   if(["Cancelled"].includes(s)) return "rust";
   if(["Draft","Pending Internal Approval"].includes(s)) return "ink";
   if(["Paused","Under Review"].includes(s)) return "gold";
+  if(s==="Closed for Applications") return "ink";
   return "gold";
+}
+/* Display-only: the stored status stays "Open for Applications"/"Published" —
+   that's what every actual rule in the system (public visibility, RLS, the
+   status-change workflow) keys off. This just relabels the badge staff see
+   once the closing time has genuinely passed, so the register doesn't keep
+   reading "Open" for something no longer accepting applications. */
+function rfqDisplayStatus(r){
+  if((r.status==="Open for Applications"||r.status==="Published") && rfqIsClosed(r.id)) return "Closed for Applications";
+  return r.status;
 }
 function appBadgeClass(s){
   if(s==="Unsuccessful"||s==="Ineligible"||s==="Validation Failed"||s==="Incomplete") return "rust";
@@ -719,7 +730,7 @@ function renderRfqs(){
     ${filtered.map(r=>`<tr class="rowlink" onclick="focusRfqInPipeline('${r.id}')">
       <td class="ref mono">${r.id}</td><td>${r.title}</td><td>${r.category}</td><td class="mono">${zar(r.budget)}</td>
       <td>
-        <span class="badge ${rfqBadgeClass(r.status)}">${r.status}</span>
+        <span class="badge ${rfqBadgeClass(rfqDisplayStatus(r))}">${rfqDisplayStatus(r)}</span>
         ${r.pendingStatusChange ? `<div style="font-size:10.5px; color:var(--ink-3); margin-top:3px;">⏳ Pending: ${escapeAttr(r.pendingStatusChange.targetStatus)}</div>` : ''}
       </td>
       <td class="mono">${r.open}</td><td class="mono">${formatCloseDisplay(r.close)}${(r.extensionNotices&&r.extensionNotices.length) ? ` <span title="Extended ${r.extensionNotices.length}x">⏱</span>` : ''}</td>
