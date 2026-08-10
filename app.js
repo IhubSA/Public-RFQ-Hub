@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.25.1",
+  version: "2.25.2",
   date: "2026-08-11",
   changelog: [
+    "2.25.2 (2026-08-11) — An 'Evaluate this applicant' button was showing at every stage from Under Evaluation all the way through Contract Signed and beyond, with no upper bound — meaning it appeared at Preferred Bidder and Contract Being Drafted too, stages that should already have a locked-in score behind them, not an open invitation to score for the first time. Evaluating (and re-evaluating) is now only possible in the window it actually belongs to: from Under Evaluation up to the Recommendation gate. Past that point, an existing score still shows as a read-only historical record, but the action to create or change one is gone — and if a case reached those later stages without ever being scored, the section now stays empty instead of showing a button that shouldn't be there. Verified all 8 combinations directly: with and without an existing score, at every relevant stage from Under Evaluation through Contract Being Drafted.",
     "2.25.1 (2026-08-11) — The proposal submission page a bidder lands on after being invited now leads with a clear instruction naming the RFQ number and title, telling them plainly to state their full bid amount and upload their scope of works, detailed pricing, and any other supporting documents — this is the one page in the whole system a real bid rides on, so it shouldn't read like a blank form. Adding more than one document was already technically possible but not obvious; the button now relabels itself to \"+ Add another document\" once a file's been added, making it clear multiple uploads are expected.",
     "2.25.0 (2026-08-11) — Closed RFQs used to vanish from the public portal the instant they closed — a real problem, since the invitation email explicitly tells applicants to use the portal's 'Ask a question' option for anything they need to raise. Closed RFQs now stay listed for 20 days after closing, clearly marked 'Closed' with the Apply button removed (applications are still genuinely cut off), while Ask a Question and the tender documents remain available. The question-submission function had the same cutoff and got the same fix, plus a bug fix along the way: it was still comparing against the old date-only format from before closing times existed, so it wasn't as precise as the rest of the system. After 20 days, an RFQ disappears from the public listing as before. Verified directly against the database — still-open, closed 5 days ago, and closed 19 days ago all correctly stay visible; closed 21 days ago correctly disappears.",
     "2.24.0 (2026-08-10) — RFQ closing dates now include a time, not just a day. A bare date was genuinely ambiguous — did it close at midnight, end of business, first thing that morning? The closing-date field (new RFQs, editing, and extensions) is now a real date-and-time picker, and every rule that depends on it — the no-reviews-before-closing lock, the public application cutoff, and public visibility — now compares to the precise minute rather than the calendar day. Existing RFQs default to 23:59:59 on their original date, so nothing changes for them unless edited. Verified directly against the database at minute-level precision: an RFQ closing 5 minutes out stays genuinely locked, and the same RFQ closing 1 minute in the past genuinely unlocks — plus the extend-date flow, the display formatting everywhere a closing time appears, and the full closing-lock regression suite all re-verified against the new precision.",
@@ -926,10 +927,16 @@ let currentApplicantEvaluation = null;
 function renderEvaluationSection(a){
   const el = document.getElementById('ad-evaluation');
   if(!el) return;
-  const reachedEvaluation = KANBAN_STAGES.indexOf(a.status) >= KANBAN_STAGES.indexOf("Under Evaluation");
+  const stageIdx = KANBAN_STAGES.indexOf(a.status);
+  const reachedEvaluation = stageIdx >= KANBAN_STAGES.indexOf("Under Evaluation");
+  // Evaluation belongs to the window between reaching "Under Evaluation" and the
+  // Recommendation gate — once a recommendation has moved the case past that point
+  // (Preferred Bidder, Contract Being Drafted, etc.), the score that justified it
+  // shouldn't still be editable, and there's nothing to "start" evaluating either.
+  const evaluationActionable = reachedEvaluation && stageIdx <= KANBAN_STAGES.indexOf("Recommendation Recorded");
   const ev = currentApplicantEvaluation;
 
-  if(!ev && !reachedEvaluation){ el.innerHTML = ''; return; }
+  if(!ev && !evaluationActionable){ el.innerHTML = ''; return; }
 
   let html = `<h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Evaluation</h3>`;
 
@@ -942,7 +949,7 @@ function renderEvaluationSection(a){
         <div class="field-row"><span class="k">Date</span><span class="mono">${(ev.evaluated_at||'').slice(0,10)}</span></div>
         ${ev.conflict_declared ? `<div class="field-row"><span class="k">Conflict declared</span><span class="badge rust">Yes${ev.conflict_notes? ' — '+escapeAttr(ev.conflict_notes):''}</span></div>` : ''}
       </div>
-      ${(can('can_evaluate_approve') && rfqIsClosed(a.rfq)) ? `<button class="btn small secondary" onclick="openEvaluationModal('${a.id}')">Re-evaluate</button>` : ''}
+      ${(evaluationActionable && can('can_evaluate_approve') && rfqIsClosed(a.rfq)) ? `<button class="btn small secondary" onclick="openEvaluationModal('${a.id}')">Re-evaluate</button>` : ''}
     `;
   } else if(!rfqIsClosed(a.rfq)){
     html += `<span style="font-size:12px; color:var(--ink-3);">This RFQ is still open — evaluation can't begin until it closes.</span>`;
