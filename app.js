@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.28.0",
+  version: "2.29.0",
   date: "2026-08-12",
   changelog: [
+    "2.29.0 (2026-08-12) — RFQs can now have an approver assigned to them, right from the New/Edit RFQ form — a dropdown listing only staff with Approve & Publish RFQs permission. Assigning someone (or changing who's assigned) emails them directly that an RFQ needs their attention, with a link straight to the admin console. This fires when a Draft is newly assigned an approver, and also when a status-change request (Pause/Cancel/Under Review) comes in on an RFQ that already has one assigned — both are genuinely the same underlying need: someone with sign-off authority needs to know something is waiting on them. Re-saving with the same approver already assigned does not re-send the email. Verified directly: the dropdown correctly excludes staff without the right permission, a new assignment notifies the right person with the database write confirmed first, an unassigned RFQ sends nothing, re-saving without changing the approver doesn't re-notify, and a status-change request correctly reaches the assigned approver with the actual reason included.",
     "2.28.0 (2026-08-12) — Added a Print / Download List button to the RFQ register. It opens a clean, formatted version of the register in a new tab and triggers the browser's print dialog, which doubles as a PDF download on every modern browser — no separate export step needed. It respects whatever filters are currently applied (type, status, date range), and says so on the printed page, so what you print always matches what you were looking at on screen. Verified directly: an unfiltered print includes every RFQ with a correct count and 'No filters applied' note, a filtered print includes only the matching RFQs with the applied filters listed, a filter combination matching nothing shows a clear empty message rather than a blank table, and a blocked pop-up tells the user why instead of silently doing nothing.",
     "2.27.1 (2026-08-11) — A genuinely serious one: the admin console treated an empty RFQ table as \"this must be a fresh install\" and automatically wrote the built-in demo dataset back into the live database on load. That logic made sense back when this system had never been used for anything real, but it directly undid a deliberate, requested data reset the moment anyone next opened the admin console — with only an easy-to-miss footer note as any indication it had happened. An empty database is now simply treated as empty, exactly as entered, with no silent repopulation under any circumstance. Verified directly: loading against a database with zero RFQs results in zero RFQs shown, zero write attempts back to the database, and no seeding claim in the footer.",
     "2.27.0 (2026-08-11) — The Scores & ranking panel on Approvals now groups bidders by their RFQ with a clear section header (title, status, bidder count) instead of a flat table where every RFQ's vendors ran together with just a repeated ID column. Each RFQ's bidders now rank and sort within their own section, exactly as they were compared, just far easier to actually read. Bidders who've reached the Recommendation gate now get a 'Select as Preferred Bidder' button right there in the comparison view — it opens the exact same accountable decision modal used everywhere else in the system (name, role, conflict declaration, reason all still required), so choosing a winner while looking at the full comparison doesn't skip any of the sign-off this system is built around. Nothing stops selecting more than one bidder on the same RFQ as Preferred Bidder \u2014 that was already true before this change, just not obvious from the old flat table; each selection is still its own individually accountable decision rather than a bulk tick-and-submit, since a joint-award reason for one vendor is rarely the same as for another. Verified directly: sections render correctly per RFQ, the button only appears at the right stage, an already-selected bidder shows a marker instead of a duplicate button, and clicking through opens the real gate decision with the correct stage and labelling.",
@@ -810,6 +811,13 @@ function focusRfqInPipeline(id){
 
 let newRfqDocs = [];
 let editingRfqId = null;
+function populateApproverDropdown(selectedId){
+  const sel = document.getElementById('nr-approver');
+  if(!sel) return;
+  const eligible = employees.filter(e => e.can_publish_rfqs);
+  sel.innerHTML = `<option value="">No one assigned</option>` + eligible.map(e=>`<option value="${e.id}">${escapeAttr(e.name)} (${escapeAttr(e.position||e.email)})</option>`).join('');
+  sel.value = selectedId || '';
+}
 function openNewRfq(){
   editingRfqId = null;
   document.getElementById('nr-modal-title').textContent = 'New RFQ record';
@@ -823,6 +831,7 @@ function openNewRfq(){
   document.getElementById('nr-open').value='';
   document.getElementById('nr-close').value='';
   document.getElementById('nr-desc').value='';
+  populateApproverDropdown(null);
   renderNrDocList();
   renderNrAttachList();
   document.getElementById('modal-newrfq').classList.add('active'); document.getElementById('overlay').classList.add('active');
@@ -843,6 +852,7 @@ function openEditRfq(id){
   document.getElementById('nr-open').value = r.open||'';
   document.getElementById('nr-close').value = toDatetimeLocalValue(r.close);
   document.getElementById('nr-desc').value = r.desc||'';
+  populateApproverDropdown(r.assignedApproverId);
   renderNrDocList();
   renderNrAttachList();
   document.getElementById('modal-newrfq').classList.add('active'); document.getElementById('overlay').classList.add('active');
@@ -916,14 +926,16 @@ function removeRfqAttachment(i){
   renderNrAttachList();
 }
 
-function createRfq(){
+async function createRfq(){
   const title = document.getElementById('nr-title').value.trim();
   if(!title){ toast("Missing title","Give this RFQ a title before saving."); return; }
   if(newRfqAttachments.some(f=>f.uploading)){ toast("Still uploading","Please wait for tender document uploads to finish before saving."); return; }
+  const selectedApproverId = document.getElementById('nr-approver').value || null;
 
   if(editingRfqId){
     const r = rfqs.find(x=>x.id===editingRfqId);
     if(!r){ toast("Not found","Could not find that RFQ to update."); closeAll(); return; }
+    const previousApproverId = r.assignedApproverId || null;
     r.title = title;
     r.category = document.getElementById('nr-category').value||"General";
     r.budget = Number(document.getElementById('nr-budget').value)||0;
@@ -932,12 +944,14 @@ function createRfq(){
     r.desc = document.getElementById('nr-desc').value||"";
     r.requiredDocs = newRfqDocs.slice();
     r.attachments = newRfqAttachments.map(f=>({name:f.name, path:f.path}));
+    r.assignedApproverId = selectedApproverId;
     renderRfqs();
     logAudit(`${r.id} edited (still Draft)`,"Procurement Manager");
     closeAll();
     toast("RFQ updated", `${r.id} has been saved.`);
-    sb.from('rfq_rfqs').update({title:r.title, category:r.category, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[]}).eq('id', r.id)
-      .then(({error})=>{ if(error){ console.error('editRfq persist failed', error); toast("Not saved to database", "The change shows locally but failed to save to Supabase — check the console."); } });
+    const { error } = await sb.from('rfq_rfqs').update({title:r.title, category:r.category, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_id:r.assignedApproverId}).eq('id', r.id);
+    if(error){ console.error('editRfq persist failed', error); toast("Not saved to database", "The change shows locally but failed to save to Supabase — check the console."); return; }
+    if(selectedApproverId && selectedApproverId !== previousApproverId) notifyAssignedApprover(r, 'This RFQ is a Draft awaiting your review and publishing.');
     return;
   }
 
@@ -947,15 +961,24 @@ function createRfq(){
     budget:Number(document.getElementById('nr-budget').value)||0, status:"Draft",
     open:document.getElementById('nr-open').value||today(), close:fromDatetimeLocalValue(document.getElementById('nr-close').value) || defaultCloseDateTime(21),
     desc:document.getElementById('nr-desc').value||"", requiredDocs:newRfqDocs.slice(),
-    attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path}))};
+    attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path})), assignedApproverId:selectedApproverId};
   rfqs.unshift(r);
   populateRfqFilter();
   logAudit(`${id} created as Draft with ${newRfqDocs.length} required document(s)`,"Procurement Manager");
   closeAll();
   toast("RFQ saved", `${id} created as a Draft. Publishing requires sign-off.`);
   switchView('rfqs');
-  sb.from('rfq_rfqs').insert({id:r.id, title:r.title, category:r.category, status:r.status, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[]})
-    .then(({error})=>{ if(error){ console.error('createRfq persist failed', error); toast("Not saved to database", "The RFQ shows locally but failed to save to Supabase — check the console."); } });
+  const { error } = await sb.from('rfq_rfqs').insert({id:r.id, title:r.title, category:r.category, status:r.status, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_id:r.assignedApproverId});
+  if(error){ console.error('createRfq persist failed', error); toast("Not saved to database", "The RFQ shows locally but failed to save to Supabase — check the console."); return; }
+  if(selectedApproverId) notifyAssignedApprover(r, 'This new RFQ is a Draft awaiting your review and publishing.');
+}
+function notifyAssignedApprover(r, message){
+  const approver = employees.find(e => e.id === r.assignedApproverId);
+  if(!approver || !approver.email) return;
+  sb.functions.invoke('send-notification-email', { body: {
+    trigger: 'rfq_approval_needed', recipientEmail: approver.email, recipientName: approver.name, rfqId: r.id,
+    customMessage: message, triggeredBy: (currentEmployee&&currentEmployee.email)||'system',
+  } }).then(({data,error})=>{ if(error||!data||!data.success) console.error('approver notification failed', error||data); });
 }
 
 /* ============================================================
@@ -1449,6 +1472,7 @@ function submitRfqStatusRequest(){
   closeAll();
   renderRfqs();
   toast("Submitted for review", `${r.id}'s status change now needs approval before it takes effect.`);
+  if(r.assignedApproverId) notifyAssignedApprover(r, `A status change to "${targetStatus}" has been requested on this RFQ and needs your approval. Reason given: ${reason}`);
   sb.from('rfq_rfqs').update({pending_status_change:r.pendingStatusChange}).eq('id', r.id)
     .then(({error})=>{ if(error){ console.error('rfq status request persist failed', error); toast("Not saved to database", "The request shows locally but failed to save — check the console."); } });
 }
@@ -2565,7 +2589,7 @@ async function loadFromSupabase(){
     (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, action:t.action, actor:t.actor, note:t.note||''});
   });
 
-  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[]}));
+  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverId:r.assigned_approver_id||null}));
   applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
 }
