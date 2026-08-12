@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.27.1",
-  date: "2026-08-11",
+  version: "2.28.0",
+  date: "2026-08-12",
   changelog: [
+    "2.28.0 (2026-08-12) — Added a Print / Download List button to the RFQ register. It opens a clean, formatted version of the register in a new tab and triggers the browser's print dialog, which doubles as a PDF download on every modern browser — no separate export step needed. It respects whatever filters are currently applied (type, status, date range), and says so on the printed page, so what you print always matches what you were looking at on screen. Verified directly: an unfiltered print includes every RFQ with a correct count and 'No filters applied' note, a filtered print includes only the matching RFQs with the applied filters listed, a filter combination matching nothing shows a clear empty message rather than a blank table, and a blocked pop-up tells the user why instead of silently doing nothing.",
     "2.27.1 (2026-08-11) — A genuinely serious one: the admin console treated an empty RFQ table as \"this must be a fresh install\" and automatically wrote the built-in demo dataset back into the live database on load. That logic made sense back when this system had never been used for anything real, but it directly undid a deliberate, requested data reset the moment anyone next opened the admin console — with only an easy-to-miss footer note as any indication it had happened. An empty database is now simply treated as empty, exactly as entered, with no silent repopulation under any circumstance. Verified directly: loading against a database with zero RFQs results in zero RFQs shown, zero write attempts back to the database, and no seeding claim in the footer.",
     "2.27.0 (2026-08-11) — The Scores & ranking panel on Approvals now groups bidders by their RFQ with a clear section header (title, status, bidder count) instead of a flat table where every RFQ's vendors ran together with just a repeated ID column. Each RFQ's bidders now rank and sort within their own section, exactly as they were compared, just far easier to actually read. Bidders who've reached the Recommendation gate now get a 'Select as Preferred Bidder' button right there in the comparison view — it opens the exact same accountable decision modal used everywhere else in the system (name, role, conflict declaration, reason all still required), so choosing a winner while looking at the full comparison doesn't skip any of the sign-off this system is built around. Nothing stops selecting more than one bidder on the same RFQ as Preferred Bidder \u2014 that was already true before this change, just not obvious from the old flat table; each selection is still its own individually accountable decision rather than a bulk tick-and-submit, since a joint-award reason for one vendor is rarely the same as for another. Verified directly: sections render correctly per RFQ, the button only appears at the right stage, an already-selected bidder shows a marker instead of a duplicate button, and clicking through opens the real gate decision with the correct stage and labelling.",
     "2.26.2 (2026-08-11) — The RFQ register kept showing 'Open for Applications' for tenders that had genuinely closed, which read as misleading at a glance. The status badge now shows 'Closed for Applications' once the closing time has passed, in a neutral grey rather than the active gold used for genuinely open tenders. This is display-only by design — the actual stored status stays exactly as it was, since the public portal's visibility rules, the database-level review lock, and the status-change workflow all depend on that real value being untouched. Filtering the register by status still searches the real value too, so nothing else changed underneath. Verified across 8 scenarios: still-open, closed, Published-status closed, and every unrelated status (Draft, Paused, Awarded, Cancelled, no closing date set) all behave exactly as they should, with the underlying stored value confirmed unchanged throughout.",
@@ -715,18 +716,74 @@ function clearRfqFilters(){
   document.getElementById('rfq-filter-date-to').value = '';
   renderRfqs();
 }
-function renderRfqs(){
-  populateRfqCategoryStatusFilters();
+function getFilteredRfqs(){
   const cat = document.getElementById('rfq-filter-category').value || 'all';
   const stat = document.getElementById('rfq-filter-status').value || 'all';
   const dateFrom = document.getElementById('rfq-filter-date-from').value;
   const dateTo = document.getElementById('rfq-filter-date-to').value;
-  const filtered = rfqs.filter(r=>
+  return rfqs.filter(r=>
     (cat==='all' || r.category===cat) &&
     (stat==='all' || r.status===stat) &&
     (!dateFrom || !r.close || new Date(r.close) >= new Date(dateFrom)) &&
     (!dateTo || !r.close || new Date(r.close) < new Date(new Date(dateTo).getTime() + 24*60*60*1000))
   );
+}
+function printRfqList(){
+  const filtered = getFilteredRfqs();
+  const catSel = document.getElementById('rfq-filter-category');
+  const statSel = document.getElementById('rfq-filter-status');
+  const dateFrom = document.getElementById('rfq-filter-date-from').value;
+  const dateTo = document.getElementById('rfq-filter-date-to').value;
+  const filterNotes = [];
+  if(catSel.value !== 'all') filterNotes.push(`Type: ${catSel.value}`);
+  if(statSel.value !== 'all') filterNotes.push(`Status: ${statSel.value}`);
+  if(dateFrom) filterNotes.push(`Closes after ${dateFrom}`);
+  if(dateTo) filterNotes.push(`Closes before ${dateTo}`);
+
+  const rows = filtered.map(r => `
+    <tr>
+      <td>${escapeAttr(r.id)}</td>
+      <td>${escapeAttr(r.title)}</td>
+      <td>${escapeAttr(r.category)}</td>
+      <td>${zar(r.budget)}</td>
+      <td>${escapeAttr(rfqDisplayStatus(r))}</td>
+      <td>${escapeAttr(r.open||'')}</td>
+      <td>${formatCloseDisplay(r.close)}</td>
+    </tr>`).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RFQ Register — CNWE Energy</title>
+    <style>
+      body{ font-family: Arial, Helvetica, sans-serif; color:#0B3654; margin:32px; }
+      h1{ font-size:20px; margin-bottom:2px; }
+      .meta{ color:#6B7785; font-size:12px; margin-bottom:18px; }
+      table{ width:100%; border-collapse:collapse; font-size:12px; }
+      th{ text-align:left; background:#0B3654; color:#fff; padding:8px 10px; }
+      td{ padding:7px 10px; border-bottom:1px solid #D8DEE4; }
+      tr:nth-child(even) td{ background:#F3F5F7; }
+      @media print { body{ margin:12mm; } }
+    </style></head>
+    <body>
+      <h1>CNWE Energy — RFQ Register</h1>
+      <div class="meta">
+        Generated ${new Date().toLocaleString('en-ZA')} · ${filtered.length} RFQ${filtered.length===1?'':'s'}
+        ${filterNotes.length ? ' · Filtered by: ' + filterNotes.join(', ') : ' · No filters applied'}
+      </div>
+      <table>
+        <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Opens</th><th>Closes</th></tr>
+        ${rows || '<tr><td colspan="7" style="text-align:center; color:#6B7785;">No RFQs match the current filters.</td></tr>'}
+      </table>
+    </body></html>`;
+
+  const win = window.open('', '_blank');
+  if(!win){ toast("Pop-up blocked", "Please allow pop-ups for this site to print or download the list."); return; }
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  win.print();
+}
+function renderRfqs(){
+  populateRfqCategoryStatusFilters();
+  const filtered = getFilteredRfqs();
   document.getElementById('rfq-table').innerHTML = `
     <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Opens</th><th>Closes</th><th></th></tr>
     ${filtered.map(r=>`<tr class="rowlink" onclick="focusRfqInPipeline('${r.id}')">
