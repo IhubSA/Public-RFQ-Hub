@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.30.0",
+  version: "2.30.1",
   date: "2026-08-13",
   changelog: [
+    "2.30.1 (2026-08-13) — Applications were already fully visible in the Applicants pipeline before an RFQ closes (that was never actually restricted, only reviewing them was) — but there was no quick way to see how many an RFQ had received without leaving the register and digging through a separate tab. The RFQ register now has an Applications column showing a live count for each tender, right next to its status — a non-zero count stands out in bold, so it's obvious at a glance whether interest is coming in, even while the tender is still open. Carried through to the Print / Download List too, so what's printed always matches what's on screen. Verified directly: the count is correct per RFQ, a genuinely empty RFQ shows a muted \"0 received\" rather than looking broken, and the printed list includes the same column with the same numbers.",
     "2.30.0 (2026-08-13) — The invitation to submit a proposal never actually told the applicant when it was due — only the original application had a deadline, and that's a different stage entirely. Approving the Validation gate now requires setting a genuine submission deadline (a real date and time, defaulting to 14 days out but fully adjustable), which is included in the invitation email, shown again prominently on the applicant's submission page, and actually enforced — the system rejects a submission outright once the deadline has passed rather than just displaying it as a suggestion. Staff can see the deadline in the case drawer both before submission (what was promised) and after (what it was). Verified directly: the field only appears for this specific decision, can't be left blank or set in the past, saves atomically alongside the existing invitation token, the real email content was sent and confirmed readable, and the public submission page both displays the deadline correctly and fully blocks the form once it's passed.",
     "2.29.0 (2026-08-12) — RFQs can now have an approver assigned to them, right from the New/Edit RFQ form — a dropdown listing only staff with Approve & Publish RFQs permission. Assigning someone (or changing who's assigned) emails them directly that an RFQ needs their attention, with a link straight to the admin console. This fires when a Draft is newly assigned an approver, and also when a status-change request (Pause/Cancel/Under Review) comes in on an RFQ that already has one assigned — both are genuinely the same underlying need: someone with sign-off authority needs to know something is waiting on them. Re-saving with the same approver already assigned does not re-send the email. Verified directly: the dropdown correctly excludes staff without the right permission, a new assignment notifies the right person with the database write confirmed first, an unassigned RFQ sends nothing, re-saving without changing the approver doesn't re-notify, and a status-change request correctly reaches the assigned approver with the actual reason included.",
     "2.28.0 (2026-08-12) — Added a Print / Download List button to the RFQ register. It opens a clean, formatted version of the register in a new tab and triggers the browser's print dialog, which doubles as a PDF download on every modern browser — no separate export step needed. It respects whatever filters are currently applied (type, status, date range), and says so on the printed page, so what you print always matches what you were looking at on screen. Verified directly: an unfiltered print includes every RFQ with a correct count and 'No filters applied' note, a filtered print includes only the matching RFQs with the applied filters listed, a filter combination matching nothing shows a clear empty message rather than a blank table, and a blocked pop-up tells the user why instead of silently doing nothing.",
@@ -749,6 +750,7 @@ function printRfqList(){
       <td>${escapeAttr(r.category)}</td>
       <td>${zar(r.budget)}</td>
       <td>${escapeAttr(rfqDisplayStatus(r))}</td>
+      <td>${applicants.filter(a=>a.rfq===r.id).length}</td>
       <td>${escapeAttr(r.open||'')}</td>
       <td>${formatCloseDisplay(r.close)}</td>
     </tr>`).join('');
@@ -771,8 +773,8 @@ function printRfqList(){
         ${filterNotes.length ? ' · Filtered by: ' + filterNotes.join(', ') : ' · No filters applied'}
       </div>
       <table>
-        <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Opens</th><th>Closes</th></tr>
-        ${rows || '<tr><td colspan="7" style="text-align:center; color:#6B7785;">No RFQs match the current filters.</td></tr>'}
+        <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Applications</th><th>Opens</th><th>Closes</th></tr>
+        ${rows || '<tr><td colspan="8" style="text-align:center; color:#6B7785;">No RFQs match the current filters.</td></tr>'}
       </table>
     </body></html>`;
 
@@ -787,13 +789,16 @@ function renderRfqs(){
   populateRfqCategoryStatusFilters();
   const filtered = getFilteredRfqs();
   document.getElementById('rfq-table').innerHTML = `
-    <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Opens</th><th>Closes</th><th></th></tr>
-    ${filtered.map(r=>`<tr class="rowlink" onclick="focusRfqInPipeline('${r.id}')">
+    <tr><th>Reference</th><th>Title</th><th>Category</th><th>Budget</th><th>Status</th><th>Applications</th><th>Opens</th><th>Closes</th><th></th></tr>
+    ${filtered.map(r=>{
+      const appCount = applicants.filter(a=>a.rfq===r.id).length;
+      return `<tr class="rowlink" onclick="focusRfqInPipeline('${r.id}')">
       <td class="ref mono">${r.id}</td><td>${r.title}</td><td>${r.category}</td><td class="mono">${zar(r.budget)}</td>
       <td>
         <span class="badge ${rfqBadgeClass(rfqDisplayStatus(r))}">${rfqDisplayStatus(r)}</span>
         ${r.pendingStatusChange ? `<div style="font-size:10.5px; color:var(--ink-3); margin-top:3px;">⏳ Pending: ${escapeAttr(r.pendingStatusChange.targetStatus)}</div>` : ''}
       </td>
+      <td class="mono" style="${appCount>0?'font-weight:600;':'color:var(--ink-3);'}">${appCount} received</td>
       <td class="mono">${r.open}</td><td class="mono">${formatCloseDisplay(r.close)}${(r.extensionNotices&&r.extensionNotices.length) ? ` <span title="Extended ${r.extensionNotices.length}x">⏱</span>` : ''}</td>
       <td style="white-space:nowrap;">
         ${r.status==="Draft" && can('can_manage_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); openEditRfq('${r.id}')">Edit</button>` : ''}
@@ -801,7 +806,8 @@ function renderRfqs(){
         ${r.pendingStatusChange && can('can_publish_rfqs') ? `<button class="btn small gold" onclick="event.stopPropagation(); openRfqStatusReview('${r.id}')">Review</button>` : ''}
         ${!r.pendingStatusChange && r.status!=="Draft" && can('can_manage_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); openRfqStatusRequest('${r.id}')">Change status</button>` : ''}
         ${["Open for Applications","Published"].includes(r.status) && can('can_publish_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); openExtendDate('${r.id}')">Extend date</button>` : ''}
-      </td></tr>`).join('') || `<tr><td colspan="8" style="text-align:center; color:var(--ink-3); padding:20px;">No RFQs match these filters.</td></tr>`}
+      </td></tr>`;
+    }).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--ink-3); padding:20px;">No RFQs match these filters.</td></tr>`}
   `;
 }
 function focusRfqInPipeline(id){
