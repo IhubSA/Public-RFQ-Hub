@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.29.0",
-  date: "2026-08-12",
+  version: "2.30.0",
+  date: "2026-08-13",
   changelog: [
+    "2.30.0 (2026-08-13) — The invitation to submit a proposal never actually told the applicant when it was due — only the original application had a deadline, and that's a different stage entirely. Approving the Validation gate now requires setting a genuine submission deadline (a real date and time, defaulting to 14 days out but fully adjustable), which is included in the invitation email, shown again prominently on the applicant's submission page, and actually enforced — the system rejects a submission outright once the deadline has passed rather than just displaying it as a suggestion. Staff can see the deadline in the case drawer both before submission (what was promised) and after (what it was). Verified directly: the field only appears for this specific decision, can't be left blank or set in the past, saves atomically alongside the existing invitation token, the real email content was sent and confirmed readable, and the public submission page both displays the deadline correctly and fully blocks the form once it's passed.",
     "2.29.0 (2026-08-12) — RFQs can now have an approver assigned to them, right from the New/Edit RFQ form — a dropdown listing only staff with Approve & Publish RFQs permission. Assigning someone (or changing who's assigned) emails them directly that an RFQ needs their attention, with a link straight to the admin console. This fires when a Draft is newly assigned an approver, and also when a status-change request (Pause/Cancel/Under Review) comes in on an RFQ that already has one assigned — both are genuinely the same underlying need: someone with sign-off authority needs to know something is waiting on them. Re-saving with the same approver already assigned does not re-send the email. Verified directly: the dropdown correctly excludes staff without the right permission, a new assignment notifies the right person with the database write confirmed first, an unassigned RFQ sends nothing, re-saving without changing the approver doesn't re-notify, and a status-change request correctly reaches the assigned approver with the actual reason included.",
     "2.28.0 (2026-08-12) — Added a Print / Download List button to the RFQ register. It opens a clean, formatted version of the register in a new tab and triggers the browser's print dialog, which doubles as a PDF download on every modern browser — no separate export step needed. It respects whatever filters are currently applied (type, status, date range), and says so on the printed page, so what you print always matches what you were looking at on screen. Verified directly: an unfiltered print includes every RFQ with a correct count and 'No filters applied' note, a filtered print includes only the matching RFQs with the applied filters listed, a filter combination matching nothing shows a clear empty message rather than a blank table, and a blocked pop-up tells the user why instead of silently doing nothing.",
     "2.27.1 (2026-08-11) — A genuinely serious one: the admin console treated an empty RFQ table as \"this must be a fresh install\" and automatically wrote the built-in demo dataset back into the live database on load. That logic made sense back when this system had never been used for anything real, but it directly undid a deliberate, requested data reset the moment anyone next opened the admin console — with only an easy-to-miss footer note as any indication it had happened. An empty database is now simply treated as empty, exactly as entered, with no silent repopulation under any circumstance. Verified directly: loading against a database with zero RFQs results in zero RFQs shown, zero write attempts back to the database, and no seeding claim in the footer.",
@@ -1146,13 +1147,22 @@ function renderProposalSection(a){
   const el = document.getElementById('ad-proposal');
   if(!el) return;
   if(!a.proposal){
-    el.innerHTML = '';
+    if(a.status === 'Invited to Submit Proposal' && a.proposalDeadline){
+      el.innerHTML = `
+        <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Proposal invitation sent</h3>
+        <div class="field-row"><span class="k">Submission deadline</span><span class="mono" style="font-weight:600;">${formatCloseDisplay(a.proposalDeadline)}</span></div>
+        <p style="font-size:11.5px; color:var(--ink-3); margin-top:4px;">The applicant was given this deadline in their invitation email and sees it again on their submission page.</p>
+      `;
+    } else {
+      el.innerHTML = '';
+    }
     return;
   }
   el.innerHTML = `
     <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Submitted proposal</h3>
     <div class="field-row"><span class="k">Total price</span><span class="mono" style="font-weight:600;">${escapeAttr(String(a.proposal.totalPrice))}</span></div>
     <div class="field-row"><span class="k">Submitted</span><span class="mono">${(a.proposal.submittedAt||'').slice(0,10)}</span></div>
+    ${a.proposalDeadline ? `<div class="field-row"><span class="k">Deadline was</span><span class="mono">${formatCloseDisplay(a.proposalDeadline)}</span></div>` : ''}
     <div id="ad-proposal-docs" style="margin-top:6px;"><span style="font-size:12px; color:var(--ink-3);">Loading document links…</span></div>
   `;
   const docs = a.proposal.documents || [];
@@ -1412,6 +1422,9 @@ function requestApproval(applicantId){
   document.getElementById('ap-approve-btn').textContent = `Approve → ${nextStage}`;
   document.getElementById('ap-reject-btn').style.display = hasRegret ? 'inline-block' : 'none';
   document.getElementById('ap-reject-btn').textContent = 'Regret / Unsuccessful';
+  const isInvitation = nextStage === 'Invited to Submit Proposal';
+  document.getElementById('ap-deadline-wrap').style.display = isInvitation ? 'block' : 'none';
+  document.getElementById('ap-deadline').value = isInvitation ? toDatetimeLocalValue(defaultCloseDateTime(14)) : '';
   resetConflictUI();
   document.getElementById('modal-approval').classList.add('active');
   document.getElementById('overlay').classList.add('active');
@@ -1656,14 +1669,23 @@ async function submitApproval(isApprove){
   if(pendingAction){
     const a = applicants.find(x=>x.id===pendingAction.applicantId);
     if(isApprove){
+      const isInvitation = pendingAction.nextStage === 'Invited to Submit Proposal';
+      let deadlineIso = null;
+      if(isInvitation){
+        const deadlineRaw = document.getElementById('ap-deadline').value;
+        if(!deadlineRaw){ toast("Deadline required", "Please set a proposal submission deadline before inviting this applicant."); return; }
+        deadlineIso = fromDatetimeLocalValue(deadlineRaw);
+        if(!deadlineIso || new Date(deadlineIso) <= new Date()){ toast("Deadline must be in the future", "Please choose a proposal submission deadline that hasn't already passed."); return; }
+      }
       a.status = pendingAction.nextStage;
       const entry = {date:today(), action:`Advanced to ${pendingAction.nextStage}`, actor:`${name} (${role})`};
       a.timeline.push(entry);
-      const isInvitation = pendingAction.nextStage === 'Invited to Submit Proposal';
       const extraFields = {};
       if(isInvitation){
         a.proposalToken = generateSecureToken();
+        a.proposalDeadline = deadlineIso;
         extraFields.proposal_token = a.proposalToken;
+        extraFields.proposal_deadline = a.proposalDeadline;
       }
       await persistApplicantChange(a, entry, extraFields);
       logAudit(`${a.business} advanced to ${pendingAction.nextStage}`, `${name} · ${role}`, comment);
@@ -2246,10 +2268,19 @@ async function initProposalSubmitView(token){
         </div>`;
       return;
     }
+    if(data.deadlinePassed){
+      bodyEl.innerHTML = `
+        <div style="padding:16px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); color:var(--rust);">
+          <strong>The submission deadline for this proposal has passed.</strong>
+          <p style="margin-top:8px; font-size:13px;">Deadline was ${formatCloseDisplay(data.proposalDeadline)}. Please contact the procurement team directly if you believe this is a mistake.</p>
+        </div>`;
+      return;
+    }
     proposalDocState = [];
     bodyEl.innerHTML = `
       <div style="padding:14px 16px; background:#FCF3DE; border:1px solid var(--gold); border-radius:var(--radius); font-size:13.5px; color:var(--ink); margin-bottom:16px; line-height:1.5;">
         You have been selected to submit your bid for <strong>RFQ No. ${escapeAttr(data.rfqId)}</strong> — ${escapeAttr(data.rfqTitle)}. Please state the full bid amount and upload all relevant documents, including your scope of works, detailed pricing, and any other documents that support your bid.
+        ${data.proposalDeadline ? `<div style="margin-top:8px; font-weight:600;">Submission deadline: ${formatCloseDisplay(data.proposalDeadline)}</div>` : ''}
       </div>
       <label>Total price (incl. VAT)</label>
       <input type="number" id="ps-price" min="0" step="0.01" placeholder="e.g. 125000.00">
@@ -2590,6 +2621,6 @@ async function loadFromSupabase(){
   });
 
   rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverId:r.assigned_approver_id||null}));
-  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null}));
+  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
 }

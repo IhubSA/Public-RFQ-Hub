@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.29.0 (2026-08-12). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.30.0 (2026-08-13). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -516,6 +516,11 @@
       Because you've declared a conflict, you can't record this decision yourself. Log your recusal below, then hand this case to a colleague who doesn't have a conflict.
     </div>
     <div id="ap-normal-fields">
+      <div id="ap-deadline-wrap" style="display:none;">
+        <label>Proposal submission deadline</label>
+        <input type="datetime-local" id="ap-deadline">
+        <p style="font-size:11px; color:var(--ink-3); margin-top:4px; margin-bottom:12px;">Required to invite this applicant — it's included in their invitation email and shown on their submission page. Submissions are blocked once it passes.</p>
+      </div>
       <label>Reason / comments</label>
       <textarea id="ap-comment" placeholder="Why this decision is being made"></textarea>
       <p style="font-size:11px; color:var(--ink-3); margin-top:4px;">If you reject or regret this case, this text is required and is shared directly with the applicant by email — write it as you'd want them to read it.</p>
