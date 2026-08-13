@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.30.1",
+  version: "2.31.0",
   date: "2026-08-13",
   changelog: [
+    "2.31.0 (2026-08-13) — Removed the closing-date review lock entirely, at your explicit request, so urgent RFQs can be screened, validated, evaluated, and moved through to an invitation without waiting for the tender to close. Applications, comments, and scoring can now happen on any RFQ regardless of whether it's still open — this reverses the database-level restriction added in an earlier version, across every layer it touched (the database policies on applicants, timeline events, and evaluations, and the matching interface messages that used to block those actions). Two related things were deliberately left untouched, since they're separate features: the 'Closed for Applications' badge on the register still updates correctly once a tender's time passes, and evaluation is still only possible in its own window (Under Evaluation through the Recommendation gate) — that restriction is about pipeline stage ordering, not closing dates, and wasn't part of what changed. Verified directly against the database that reviewing an applicant on an RFQ closing 10 days out now succeeds, and confirmed both of the untouched features still behave exactly as before.",
     "2.30.1 (2026-08-13) — Applications were already fully visible in the Applicants pipeline before an RFQ closes (that was never actually restricted, only reviewing them was) — but there was no quick way to see how many an RFQ had received without leaving the register and digging through a separate tab. The RFQ register now has an Applications column showing a live count for each tender, right next to its status — a non-zero count stands out in bold, so it's obvious at a glance whether interest is coming in, even while the tender is still open. Carried through to the Print / Download List too, so what's printed always matches what's on screen. Verified directly: the count is correct per RFQ, a genuinely empty RFQ shows a muted \"0 received\" rather than looking broken, and the printed list includes the same column with the same numbers.",
     "2.30.0 (2026-08-13) — The invitation to submit a proposal never actually told the applicant when it was due — only the original application had a deadline, and that's a different stage entirely. Approving the Validation gate now requires setting a genuine submission deadline (a real date and time, defaulting to 14 days out but fully adjustable), which is included in the invitation email, shown again prominently on the applicant's submission page, and actually enforced — the system rejects a submission outright once the deadline has passed rather than just displaying it as a suggestion. Staff can see the deadline in the case drawer both before submission (what was promised) and after (what it was). Verified directly: the field only appears for this specific decision, can't be left blank or set in the past, saves atomically alongside the existing invitation token, the real email content was sent and confirmed readable, and the public submission page both displays the deadline correctly and fully blocks the form once it's passed.",
     "2.29.0 (2026-08-12) — RFQs can now have an approver assigned to them, right from the New/Edit RFQ form — a dropdown listing only staff with Approve & Publish RFQs permission. Assigning someone (or changing who's assigned) emails them directly that an RFQ needs their attention, with a link straight to the admin console. This fires when a Draft is newly assigned an approver, and also when a status-change request (Pause/Cancel/Under Review) comes in on an RFQ that already has one assigned — both are genuinely the same underlying need: someone with sign-off authority needs to know something is waiting on them. Re-saving with the same approver already assigned does not re-send the email. Verified directly: the dropdown correctly excludes staff without the right permission, a new assignment notifies the right person with the database write confirmed first, an unassigned RFQ sends nothing, re-saving without changing the approver doesn't re-notify, and a status-change request correctly reaches the assigned approver with the actual reason included.",
@@ -1051,10 +1052,8 @@ function renderEvaluationSection(a){
         <div class="field-row"><span class="k">Date</span><span class="mono">${(ev.evaluated_at||'').slice(0,10)}</span></div>
         ${ev.conflict_declared ? `<div class="field-row"><span class="k">Conflict declared</span><span class="badge rust">Yes${ev.conflict_notes? ' — '+escapeAttr(ev.conflict_notes):''}</span></div>` : ''}
       </div>
-      ${(evaluationActionable && can('can_evaluate_approve') && rfqIsClosed(a.rfq)) ? `<button class="btn small secondary" onclick="openEvaluationModal('${a.id}')">Re-evaluate</button>` : ''}
+      ${(evaluationActionable && can('can_evaluate_approve')) ? `<button class="btn small secondary" onclick="openEvaluationModal('${a.id}')">Re-evaluate</button>` : ''}
     `;
-  } else if(!rfqIsClosed(a.rfq)){
-    html += `<span style="font-size:12px; color:var(--ink-3);">This RFQ is still open — evaluation can't begin until it closes.</span>`;
   } else {
     html += can('can_evaluate_approve')
       ? `<button class="btn small gold" onclick="openEvaluationModal('${a.id}')">Evaluate this applicant</button>`
@@ -1243,8 +1242,7 @@ async function openApplicant(id){
               <div class="dc-meta">${escapeAttr(c.author)}${c.date? ' · '+escapeAttr(c.date):''}</div>
             </div>`).join('') || `<div class="dc-empty">No comments yet.</div>`}
           <div class="doc-comment-add">
-            ${!rfqIsClosed(a.rfq) ? `<span style="font-size:11px; color:var(--ink-3);">This RFQ closes ${formatCloseDisplay(rfqs.find(x=>x.id===a.rfq)?.close)} — reviews and comments can't begin until then.</span>` :
-              can('can_review_documents') ? `
+            ${can('can_review_documents') ? `
               <input type="text" class="doc-comment-input" id="new-comment-${d.docId}" placeholder="Add a review comment…" onkeydown="if(event.key==='Enter'){addDocComment('${a.id}','${d.docId}');}">
               <button class="btn small secondary" onclick="addDocComment('${a.id}','${d.docId}')">Add Comment</button>
             ` : `<span style="font-size:11px; color:var(--ink-3);">You don't have permission to add document comments.</span>`}
@@ -1256,10 +1254,7 @@ async function openApplicant(id){
   const nextStage = KANBAN_STAGES[KANBAN_STAGES.indexOf(a.status)+1];
   const canAny = can('can_screen_validate') || can('can_evaluate_approve') || can('can_manage_contracts') || can('can_review_documents');
 
-  if(a.status!=="Unsuccessful" && a.status!=="Closed" && !rfqIsClosed(a.rfq)){
-    const closeDate = formatCloseDisplay(rfqs.find(x=>x.id===a.rfq)?.close) || 'its closing date';
-    actionsEl.innerHTML = `<div style="font-size:12px; color:var(--ink-2); background:var(--paper-2); border-radius:var(--radius); padding:10px 12px; width:100%;">⏳ This RFQ is still open for applications until <strong>${closeDate}</strong>. No reviews, decisions, or scoring can happen on any applicant until it closes — this keeps the process fair to everyone still applying.</div>`;
-  } else if(a.status==="Unsuccessful"||a.status==="Closed"){
+  if(a.status==="Unsuccessful"||a.status==="Closed"){
     actionsEl.innerHTML = `<span style="font-size:12px;color:var(--ink-3);">Case closed — no further stage changes.</span>`;
   } else if(a.status==="Awaiting Signature"){
     if(can('can_manage_contracts')){
