@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.32.1",
+  version: "2.33.0",
   date: "2026-08-13",
   changelog: [
+    "2.33.0 (2026-08-13) — Real phone and tablet pass on the admin console. The sidebar previously collapsed to a bare 64px strip of unlabelled numbers on any screen under 900px wide — barely usable for real navigation. It's now a proper hamburger menu opening a full off-canvas panel with real labels, that closes itself automatically once you tap where you're going. Tables that used to blow out the entire page width on a phone (the RFQ register, Approvals, Audit Trail, Employees, Clarifications, the email log) now scroll horizontally within their own space instead of breaking the layout around them. The New RFQ form's Opens/Closes date fields, which got cut off side-by-side on a true phone width, now stack vertically below it. The public portal was already in solid shape and needed no changes — checked directly at both phone and tablet width. Along the way, testing surfaced and fixed two real bugs in the new mobile nav itself before they shipped: the background dimming overlay could get stuck visible after auto-closing the menu via navigation, and the open sidebar briefly shared a stacking layer with modals, risking one rendering behind the other. Verified directly with real screenshots at 375px and 768px, not just by reasoning about the CSS: sidebar open/closed/auto-close states, the RFQ table scrolling correctly instead of overflowing, the date fields stacking, and the dashboard and kanban pipeline both making full use of the reclaimed width.",
     "2.32.1 (2026-08-13) — The proposal submission deadline field used to pre-fill with a default of 14 days out when inviting an applicant — easy to accidentally accept without actually thinking about whether it was the right date for that specific case. The field now starts genuinely empty every time, forcing a deliberate choice before the invitation can go out. The existing rule that blocks approval without a date was already there and is unaffected — this only removes the default that made it easy to skip past without noticing. Verified directly: the field opens empty, approval is still correctly blocked if left that way, and a properly entered date still works exactly as before.",
     "2.32.0 (2026-08-13) — The public application form now blocks a company from applying to the same RFQ more than once, checked server-side (so it can't be bypassed by tampering with the form) against both company registration number and email address, trimmed and case-insensitive so formatting differences don't slip through. A genuine attempt gets a clear explanation and is pointed to contact procurement directly rather than resubmitting. Fixing this exposed a real problem in how submissions were handled: the form used to show \"Application received\" immediately, before the database write even happened — meaning a rejected duplicate would show a false success message immediately followed by a contradicting error. Submission now properly waits for a real answer from the server before saying anything either way, and the button disables with a 'Submitting…' state in between so there's no room to double-click a submission either. Also fixed a small correctness bug found along the way: the closing-date check on applications was still comparing against a bare date left over from before closing times existed, not the precise timestamp the rest of the system now uses. Verified directly: the duplicate check catches whitespace and case variations against real data, a rejected duplicate shows exactly one clear message with no phantom local entry and the button correctly re-enabling, and a genuine submission still succeeds and fires its confirmation email exactly as before.",
     "2.31.0 (2026-08-13) — Removed the closing-date review lock entirely, at your explicit request, so urgent RFQs can be screened, validated, evaluated, and moved through to an invitation without waiting for the tender to close. Applications, comments, and scoring can now happen on any RFQ regardless of whether it's still open — this reverses the database-level restriction added in an earlier version, across every layer it touched (the database policies on applicants, timeline events, and evaluations, and the matching interface messages that used to block those actions). Two related things were deliberately left untouched, since they're separate features: the 'Closed for Applications' badge on the register still updates correctly once a tender's time passes, and evaluation is still only possible in its own window (Under Evaluation through the Recommendation gate) — that restriction is about pipeline stage ordering, not closing dates, and wasn't part of what changed. Verified directly against the database that reviewing an applicant on an RFQ closing 10 days out now succeeds, and confirmed both of the untouched features still behave exactly as before.",
@@ -288,7 +289,20 @@ function seed(){
 /* ============================================================
    NAVIGATION
    ============================================================ */
+function toggleSidebar(){
+  const sb = document.getElementById('sidebar');
+  const willOpen = !sb.classList.contains('open');
+  sb.classList.toggle('open', willOpen);
+  const overlay = document.getElementById('overlay');
+  if(overlay) overlay.classList.toggle('active', willOpen);
+}
+function closeSidebar(){
+  document.getElementById('sidebar').classList.remove('open');
+  const overlay = document.getElementById('overlay');
+  if(overlay) overlay.classList.remove('active');
+}
 function switchView(name){
+  closeSidebar();
   if(name==='employees' && !(currentEmployee && currentEmployee.is_super_admin)){
     toast("Not available", "Only a super admin can manage employees.");
     return;
@@ -2164,6 +2178,8 @@ function closeAll(){
   document.querySelectorAll('.modal').forEach(m=>m.classList.remove('active'));
   const drawer = document.getElementById('applicant-drawer');
   if(drawer) drawer.classList.remove('active');
+  const sb = document.getElementById('sidebar');
+  if(sb) sb.classList.remove('open');
   const overlay = document.getElementById('overlay');
   if(overlay) overlay.classList.remove('active');
   pendingAction = null;
