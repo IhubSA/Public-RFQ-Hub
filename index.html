@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.33.0 (2026-08-13). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.33.1 (2026-08-13). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -59,6 +59,22 @@
   <div class="modal-foot">
     <button class="btn secondary" onclick="closeAll()">Cancel</button>
     <button class="btn gold" id="apply-submit-btn" onclick="submitApplication()">Submit application</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-application-confirmed">
+  <div class="modal-head"><h3>Application Received</h3><button class="drawer-close" style="position:static;" onclick="closeAll()">✕</button></div>
+  <div class="modal-body">
+    <p style="font-size:14px;">Thank you — your application for <strong id="ac-rfq-title"></strong> has been successfully received.</p>
+    <div style="font-size:13px; color:var(--ink-3); margin-bottom:16px;">Reference number: <span class="mono" style="color:var(--ink); font-weight:600;" id="ac-reference"></span></div>
+    <div style="padding:16px; background:#FCF3DE; border:2px solid var(--gold); border-radius:var(--radius);">
+      <div style="font-weight:700; font-size:14px; margin-bottom:6px;">What happens next</div>
+      <p style="font-size:13.5px; margin:0 0 10px 0;">Your application will now be reviewed by our procurement team.</p>
+      <p style="font-size:13.5px; font-weight:700; margin:0;">If you are shortlisted, watch your inbox for an email containing a secure link to this RFQ — you'll use it to submit your full proposal and supporting documents. Please check your spam or junk folder too, in case it lands there.</p>
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn gold" onclick="closeAll()">Got it</button>
   </div>
 </div>
 
