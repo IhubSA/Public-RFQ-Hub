@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.31.0",
+  version: "2.32.0",
   date: "2026-08-13",
   changelog: [
+    "2.32.0 (2026-08-13) — The public application form now blocks a company from applying to the same RFQ more than once, checked server-side (so it can't be bypassed by tampering with the form) against both company registration number and email address, trimmed and case-insensitive so formatting differences don't slip through. A genuine attempt gets a clear explanation and is pointed to contact procurement directly rather than resubmitting. Fixing this exposed a real problem in how submissions were handled: the form used to show \"Application received\" immediately, before the database write even happened — meaning a rejected duplicate would show a false success message immediately followed by a contradicting error. Submission now properly waits for a real answer from the server before saying anything either way, and the button disables with a 'Submitting…' state in between so there's no room to double-click a submission either. Also fixed a small correctness bug found along the way: the closing-date check on applications was still comparing against a bare date left over from before closing times existed, not the precise timestamp the rest of the system now uses. Verified directly: the duplicate check catches whitespace and case variations against real data, a rejected duplicate shows exactly one clear message with no phantom local entry and the button correctly re-enabling, and a genuine submission still succeeds and fires its confirmation email exactly as before.",
     "2.31.0 (2026-08-13) — Removed the closing-date review lock entirely, at your explicit request, so urgent RFQs can be screened, validated, evaluated, and moved through to an invitation without waiting for the tender to close. Applications, comments, and scoring can now happen on any RFQ regardless of whether it's still open — this reverses the database-level restriction added in an earlier version, across every layer it touched (the database policies on applicants, timeline events, and evaluations, and the matching interface messages that used to block those actions). Two related things were deliberately left untouched, since they're separate features: the 'Closed for Applications' badge on the register still updates correctly once a tender's time passes, and evaluation is still only possible in its own window (Under Evaluation through the Recommendation gate) — that restriction is about pipeline stage ordering, not closing dates, and wasn't part of what changed. Verified directly against the database that reviewing an applicant on an RFQ closing 10 days out now succeeds, and confirmed both of the untouched features still behave exactly as before.",
     "2.30.1 (2026-08-13) — Applications were already fully visible in the Applicants pipeline before an RFQ closes (that was never actually restricted, only reviewing them was) — but there was no quick way to see how many an RFQ had received without leaving the register and digging through a separate tab. The RFQ register now has an Applications column showing a live count for each tender, right next to its status — a non-zero count stands out in bold, so it's obvious at a glance whether interest is coming in, even while the tender is still open. Carried through to the Print / Download List too, so what's printed always matches what's on screen. Verified directly: the count is correct per RFQ, a genuinely empty RFQ shows a muted \"0 received\" rather than looking broken, and the printed list includes the same column with the same numbers.",
     "2.30.0 (2026-08-13) — The invitation to submit a proposal never actually told the applicant when it was due — only the original application had a deadline, and that's a different stage entirely. Approving the Validation gate now requires setting a genuine submission deadline (a real date and time, defaulting to 14 days out but fully adjustable), which is included in the invitation email, shown again prominently on the applicant's submission page, and actually enforced — the system rejects a submission outright once the deadline has passed rather than just displaying it as a suggestion. Staff can see the deadline in the case drawer both before submission (what was promised) and after (what it was). Verified directly: the field only appears for this specific decision, can't be left blank or set in the past, saves atomically alongside the existing invitation token, the real email content was sent and confirmed readable, and the public submission page both displays the deadline correctly and fully blocks the form once it's passed.",
@@ -2097,7 +2098,7 @@ async function handleDocFile(i, input){
   applyDocState[i].uploading = false;
   renderApplyDocList();
 }
-function submitApplication(){
+async function submitApplication(){
   const business = document.getElementById('apply-business').value.trim();
   const regNo = document.getElementById('apply-regno').value.trim();
   const name = document.getElementById('apply-name').value.trim();
@@ -2130,24 +2131,29 @@ function submitApplication(){
   const documents = applyDocState.map(d=>({docId:d.docId, name:d.name, mandatory:d.mandatory, provided:!!d.filePath, fileName:d.fileName, filePath:d.filePath||null, reviewerComments:[]}));
   const a = {id:uniqueId("APP"), rfq:applyingTo, business, companyRegNo:regNo, name, position, email, phone, comments, status:"Application Received", received:today(), reason:null, documents,
     timeline:[{date:today(), action:"Application submitted", actor:name}]};
+
+  const submitBtn = document.getElementById('apply-submit-btn');
+  if(submitBtn){ submitBtn.disabled = true; submitBtn.textContent = 'Submitting…'; }
+
+  const { data, error } = await sb.functions.invoke('submit-application', {
+    body: { id:a.id, rfqId:a.rfq, business:a.business, companyRegNo:a.companyRegNo, name:a.name, position:a.position, email:a.email, phone:a.phone, comments:a.comments||null, documents:a.documents, timeline:a.timeline }
+  });
+
+  if(error || (data && data.error)){
+    let message = (data && data.error) || (error && error.message);
+    if(error && error.context && typeof error.context.json === 'function'){
+      try{ const body = await error.context.json(); message = body.error || message; } catch(e2){ /* ignore */ }
+    }
+    console.error('application submission failed', message);
+    if(submitBtn){ submitBtn.disabled = false; submitBtn.textContent = 'Submit Application'; }
+    toast("Could not submit your application", message || 'Something went wrong — please try again.', 20000);
+    return;
+  }
+
   applicants.push(a);
   closeAll();
-  toast("Application received", `Reference ${a.id} — "Your application has been successfully received."`);
-
-  sb.functions.invoke('submit-application', {
-    body: { id:a.id, rfqId:a.rfq, business:a.business, companyRegNo:a.companyRegNo, name:a.name, position:a.position, email:a.email, phone:a.phone, comments:a.comments||null, documents:a.documents, timeline:a.timeline }
-  }).then(async ({data, error})=>{
-    if(error || (data && data.error)){
-      let message = (data && data.error) || (error && error.message);
-      if(error && error.context && typeof error.context.json === 'function'){
-        try{ const body = await error.context.json(); message = body.error || message; } catch(e2){ /* ignore */ }
-      }
-      console.error('application persist failed', message);
-      toast("Not saved to database", `Reference ${a.id}: ${message || 'Unknown error'}`, 20000);
-      return;
-    }
-    triggerEmail('application_received', a.id);
-  });
+  toast("Application received", `Reference ${a.id} — your application has been successfully received.`);
+  triggerEmail('application_received', a.id);
 }
 
 /* ============================================================
