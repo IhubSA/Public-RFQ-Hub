@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.34.0",
+  version: "2.34.1",
   date: "2026-08-14",
   changelog: [
+    "2.34.1 (2026-08-14) — Both the case-assignment email and the RFQ-approver email just linked to the bare admin login page, leaving whoever clicked to go find the actual case or tender themselves. Both now link straight to the right place \u2014 the case-assignment email opens directly to that specific applicant's drawer, the approver email opens directly to that specific RFQ. This works whether the person is already signed in, needs to sign in first, or is a brand-new employee forced through a first-time password change \u2014 the destination is preserved through all three paths rather than only working for the simplest case. Caught and fixed a real bug in my own first pass at this before shipping: the case-assignment email sends to a staff member, not the applicant, so the existing 'applicantId' field couldn't do double duty as both 'who receives this' and 'which case does this link to' \u2014 needed a genuinely separate field for the link target once I traced it through, or the deep link would have silently never worked despite looking correct in code review. Verified directly: the assignment email payload now carries the correct case reference even though the recipient is staff, and following the resulting link actually opens the right applicant's drawer with the right name and reference showing, not just the admin homepage.",
     "2.34.0 (2026-08-14) — Each applicant's case can now be assigned to one or more staff members, right from the case drawer — a new \"Assigned to\" section above Advance Stage. Assigning someone emails them directly that this specific case needs their attention, naming the applicant, reference, and current stage. This mirrors the RFQ-level approver assignment already in the system, just scoped down to an individual case instead of a whole tender, and works the same way deliberately: assignment is about visibility and notification, not a new access restriction \u2014 anyone with the right permission can still act on a case regardless of who's assigned to it. Multiple people can be assigned at once (the dropdown only offers staff not already assigned), and each person can be removed individually without affecting the others or sending any email. Verified directly: the dropdown correctly excludes already-assigned staff, assigning someone persists to the database and sends exactly one email to the right person with the right case details, assigning a second person doesn't re-notify the first, and removing someone updates correctly with no email sent.",
     "2.33.1 (2026-08-13) — Submitting an application used to just show a small toast that disappeared after a few seconds — easy to miss, and it said nothing about what actually happens next. Applicants now see a proper confirmation screen after applying, staying open until they dismiss it, with their reference number and a clearly set-apart message telling them plainly: their application will be reviewed, and if shortlisted, they'll receive an email with a secure link to submit their full proposal and supporting documents — with a nudge to check spam/junk too. Verified directly with a real rendered screenshot, not just the logic: the modal opens with the correct RFQ title and reference number populated, and the confirmation email still fires exactly as before.",
     "2.33.0 (2026-08-13) — Real phone and tablet pass on the admin console. The sidebar previously collapsed to a bare 64px strip of unlabelled numbers on any screen under 900px wide — barely usable for real navigation. It's now a proper hamburger menu opening a full off-canvas panel with real labels, that closes itself automatically once you tap where you're going. Tables that used to blow out the entire page width on a phone (the RFQ register, Approvals, Audit Trail, Employees, Clarifications, the email log) now scroll horizontally within their own space instead of breaking the layout around them. The New RFQ form's Opens/Closes date fields, which got cut off side-by-side on a true phone width, now stack vertically below it. The public portal was already in solid shape and needed no changes — checked directly at both phone and tablet width. Along the way, testing surfaced and fixed two real bugs in the new mobile nav itself before they shipped: the background dimming overlay could get stuck visible after auto-closing the menu via navigation, and the open sidebar briefly shared a stacking layer with modals, risking one rendering behind the other. Verified directly with real screenshots at 375px and 768px, not just by reasoning about the CSS: sidebar open/closed/auto-close states, the RFQ table scrolling correctly instead of overflowing, the date fields stacking, and the dashboard and kanban pipeline both making full use of the reclaimed width.",
@@ -381,6 +382,7 @@ async function submitPasswordChange(){
   btn.disabled = false; btn.textContent = 'Set password and continue';
   toast("Password set", "You're all set — welcome in.");
   showAdmin();
+  handleAdminDeepLink();
 }
 
 
@@ -419,6 +421,31 @@ function acknowledgePopia(which){
   }
 }
 
+/* Handles a ?applicant=APP-X or ?rfq=RFQ-X link from an assignment/approval email,
+   jumping straight to that specific case or tender rather than leaving the person
+   on the bare admin landing page. */
+function handleAdminDeepLink(){
+  const params = new URLSearchParams(location.search);
+  const applicantId = params.get('applicant');
+  const rfqId = params.get('rfq');
+  if(applicantId){
+    const found = applicants.find(a=>a.id===applicantId);
+    switchView('applicants');
+    if(found){
+      openApplicant(applicantId);
+    } else {
+      toast("Case not found", `${applicantId} could not be found — it may have been removed, or you may not have access.`);
+    }
+    return;
+  }
+  if(rfqId){
+    switchView('rfqs');
+    if(!rfqs.find(r=>r.id===rfqId)){
+      toast("RFQ not found", `${rfqId} could not be found — it may have been removed, or you may not have access.`);
+    }
+  }
+}
+
 async function handleLoginSubmit(){
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
@@ -440,6 +467,7 @@ async function handleLoginSubmit(){
     showChangePasswordGate();
   } else {
     showAdmin();
+    handleAdminDeepLink();
   }
 }
 
@@ -1234,7 +1262,7 @@ async function addAssignee(applicantId, employeeId){
   toast("Assigned", `${emp.name} has been assigned to ${a.business}'s case.`);
   const message = `You've been assigned to the case for ${a.business} (${a.id}), currently at "${a.status}".`;
   sb.functions.invoke('send-notification-email', { body: {
-    trigger: 'case_assigned', recipientEmail: emp.email, recipientName: emp.name, rfqId: a.rfq,
+    trigger: 'case_assigned', recipientEmail: emp.email, recipientName: emp.name, rfqId: a.rfq, linkApplicantId: a.id,
     customMessage: message, triggeredBy: (currentEmployee&&currentEmployee.email)||'system',
   } }).then(({data,error:emailErr})=>{ if(emailErr||!data||!data.success) console.error('case_assigned email failed', emailErr||data); });
 }
@@ -2268,6 +2296,7 @@ async function initAdminPage(){
         showChangePasswordGate();
       } else {
         showAdmin();
+        handleAdminDeepLink();
       }
     } else {
       showLogin();
