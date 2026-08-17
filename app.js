@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.33.1",
-  date: "2026-08-13",
+  version: "2.34.0",
+  date: "2026-08-14",
   changelog: [
+    "2.34.0 (2026-08-14) — Each applicant's case can now be assigned to one or more staff members, right from the case drawer — a new \"Assigned to\" section above Advance Stage. Assigning someone emails them directly that this specific case needs their attention, naming the applicant, reference, and current stage. This mirrors the RFQ-level approver assignment already in the system, just scoped down to an individual case instead of a whole tender, and works the same way deliberately: assignment is about visibility and notification, not a new access restriction \u2014 anyone with the right permission can still act on a case regardless of who's assigned to it. Multiple people can be assigned at once (the dropdown only offers staff not already assigned), and each person can be removed individually without affecting the others or sending any email. Verified directly: the dropdown correctly excludes already-assigned staff, assigning someone persists to the database and sends exactly one email to the right person with the right case details, assigning a second person doesn't re-notify the first, and removing someone updates correctly with no email sent.",
     "2.33.1 (2026-08-13) — Submitting an application used to just show a small toast that disappeared after a few seconds — easy to miss, and it said nothing about what actually happens next. Applicants now see a proper confirmation screen after applying, staying open until they dismiss it, with their reference number and a clearly set-apart message telling them plainly: their application will be reviewed, and if shortlisted, they'll receive an email with a secure link to submit their full proposal and supporting documents — with a nudge to check spam/junk too. Verified directly with a real rendered screenshot, not just the logic: the modal opens with the correct RFQ title and reference number populated, and the confirmation email still fires exactly as before.",
     "2.33.0 (2026-08-13) — Real phone and tablet pass on the admin console. The sidebar previously collapsed to a bare 64px strip of unlabelled numbers on any screen under 900px wide — barely usable for real navigation. It's now a proper hamburger menu opening a full off-canvas panel with real labels, that closes itself automatically once you tap where you're going. Tables that used to blow out the entire page width on a phone (the RFQ register, Approvals, Audit Trail, Employees, Clarifications, the email log) now scroll horizontally within their own space instead of breaking the layout around them. The New RFQ form's Opens/Closes date fields, which got cut off side-by-side on a true phone width, now stack vertically below it. The public portal was already in solid shape and needed no changes — checked directly at both phone and tablet width. Along the way, testing surfaced and fixed two real bugs in the new mobile nav itself before they shipped: the background dimming overlay could get stuck visible after auto-closing the menu via navigation, and the open sidebar briefly shared a stacking layer with modals, risking one rendering behind the other. Verified directly with real screenshots at 375px and 768px, not just by reasoning about the CSS: sidebar open/closed/auto-close states, the RFQ table scrolling correctly instead of overflowing, the date fields stacking, and the dashboard and kanban pipeline both making full use of the reclaimed width.",
     "2.32.1 (2026-08-13) — The proposal submission deadline field used to pre-fill with a default of 14 days out when inviting an applicant — easy to accidentally accept without actually thinking about whether it was the right date for that specific case. The field now starts genuinely empty every time, forcing a deliberate choice before the invitation can go out. The existing rule that blocks approval without a date was already there and is unaffected — this only removes the default that made it easy to skip past without noticing. Verified directly: the field opens empty, approval is still correctly blocked if left that way, and a properly entered date still works exactly as before.",
@@ -1202,6 +1203,50 @@ function renderProposalSection(a){
   });
 }
 
+function renderAssignedSection(a){
+  const el = document.getElementById('ad-assigned');
+  if(!el) return;
+  const assigned = a.assignedTo || [];
+  const eligible = employees.filter(e => !assigned.includes(e.id));
+  el.innerHTML = `
+    <div id="ad-assigned-list">
+      ${assigned.length ? assigned.map(empId=>{
+        const emp = employees.find(e=>e.id===empId);
+        const label = emp ? emp.name : 'Unknown staff member';
+        return `<div class="field-row" style="align-items:center;"><span>${escapeAttr(label)}</span><button class="btn small secondary" onclick="removeAssignee('${a.id}','${empId}')">Remove</button></div>`;
+      }).join('') : `<span style="font-size:12px; color:var(--ink-3);">Not assigned to anyone yet.</span>`}
+    </div>
+    <select id="ad-add-assignee" style="margin-top:8px;" onchange="if(this.value) addAssignee('${a.id}', this.value); this.value='';">
+      <option value="">+ Assign someone…</option>
+      ${eligible.map(e=>`<option value="${e.id}">${escapeAttr(e.name)} (${escapeAttr(e.position||e.email)})</option>`).join('')}
+    </select>
+    <p style="font-size:11px; color:var(--ink-3); margin-top:4px;">Assigning someone emails them that this case needs their attention. This doesn't restrict who can act on it \u2014 anyone with the right permission still can.</p>
+  `;
+}
+async function addAssignee(applicantId, employeeId){
+  const a = applicants.find(x=>x.id===applicantId);
+  const emp = employees.find(e=>e.id===employeeId);
+  if(!a || !emp) return;
+  a.assignedTo = [...(a.assignedTo||[]), employeeId];
+  renderAssignedSection(a);
+  const { error } = await sb.from('rfq_applicants').update({ assigned_to: a.assignedTo }).eq('id', a.id);
+  if(error){ console.error('assignee persist failed', error); toast("Not saved to database", "The assignment shows locally but failed to save — check the console."); return; }
+  toast("Assigned", `${emp.name} has been assigned to ${a.business}'s case.`);
+  const message = `You've been assigned to the case for ${a.business} (${a.id}), currently at "${a.status}".`;
+  sb.functions.invoke('send-notification-email', { body: {
+    trigger: 'case_assigned', recipientEmail: emp.email, recipientName: emp.name, rfqId: a.rfq,
+    customMessage: message, triggeredBy: (currentEmployee&&currentEmployee.email)||'system',
+  } }).then(({data,error:emailErr})=>{ if(emailErr||!data||!data.success) console.error('case_assigned email failed', emailErr||data); });
+}
+async function removeAssignee(applicantId, employeeId){
+  const a = applicants.find(x=>x.id===applicantId);
+  if(!a) return;
+  a.assignedTo = (a.assignedTo||[]).filter(id=>id!==employeeId);
+  renderAssignedSection(a);
+  const { error } = await sb.from('rfq_applicants').update({ assigned_to: a.assignedTo }).eq('id', a.id);
+  if(error){ console.error('assignee removal persist failed', error); toast("Not saved to database", "The change shows locally but failed to save — check the console."); }
+}
+
 async function openApplicant(id){
   const a = applicants.find(x=>x.id===id);
   if(!a) return;
@@ -1221,6 +1266,7 @@ async function openApplicant(id){
   `;
 
   renderProposalSection(a);
+  renderAssignedSection(a);
 
   const docs = a.documents || [];
   document.getElementById('applicant-drawer').classList.add('active');
@@ -2649,6 +2695,6 @@ async function loadFromSupabase(){
   });
 
   rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverId:r.assigned_approver_id||null}));
-  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null}));
+  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
 }
