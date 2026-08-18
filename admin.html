@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.34.2 (2026-08-14). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.35.0 (2026-08-14). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -313,6 +313,8 @@
     <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Assigned to</h3>
     <div id="ad-assigned"></div>
 
+    <div id="ad-info-requests"></div>
+
     <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Advance stage</h3>
     <div id="ad-actions" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;"></div>
 
@@ -431,6 +433,20 @@
   <div class="modal-foot">
     <button class="btn secondary" onclick="closeAll()">Cancel</button>
     <button class="btn gold" onclick="submitClarificationAnswer()">Send answer</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-info-request">
+  <div class="modal-head"><h3>Request more information</h3><button class="drawer-close" style="position:static;" onclick="closeAll()">✕</button></div>
+  <div class="modal-body">
+    <div id="ir-context" style="font-size:13px; color:var(--ink); margin-bottom:12px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius);"></div>
+    <label>What do you need from them?</label>
+    <textarea id="ir-question" placeholder="e.g. Please provide an updated B-BBEE certificate, as the one on file has expired." style="min-height:100px;"></textarea>
+    <p style="font-size:11px; color:var(--ink-3); margin-top:4px;">This is emailed to the applicant directly, along with a secure link where they can reply with text and upload documents. Write it as you'd want them to read it.</p>
+  </div>
+  <div class="modal-foot">
+    <button class="btn secondary" onclick="closeAll()">Cancel</button>
+    <button class="btn gold" onclick="submitInfoRequest()">Send request</button>
   </div>
 </div>
 

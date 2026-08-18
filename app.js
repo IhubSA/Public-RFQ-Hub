@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.34.2",
+  version: "2.35.0",
   date: "2026-08-14",
   changelog: [
+    "2.35.0 (2026-08-14) — Staff can now request more information from an applicant, available from Proposal Submitted onward through every later stage. Whoever is handling the case writes what they need in a short modal, and the applicant gets emailed directly with a secure link (no account needed) where they can reply with text and optionally attach supporting documents. The full history of requests and responses shows in the case drawer, each one clearly marked as answered or still awaiting a reply, with document links downloadable the same way submitted proposal documents already are. If the case has an assigned staff member (from the assignment feature), they're emailed the moment a response comes in, with a link straight to the case. This reuses the same secure-link architecture already proven out for proposal submissions, rather than inventing a new pattern. Verified directly across both sides: the request button is correctly hidden before Proposal Submitted and hidden entirely for staff without any relevant permission, a blank request or response is blocked, a real request persists and emails the applicant with the actual question, and the public response page correctly handles an invalid link, an already-answered request, and a fresh one \u2014 including confirming, unlike the proposal form, that a document attachment here is genuinely optional rather than required.",
     "2.34.2 (2026-08-14) — Applicant document links in the case drawer (both the initial application documents and submitted proposal documents) previously just opened the file inline in a new tab, leaving whoever clicked it to figure out how to actually save it. They now trigger a genuine download with the file's real name, using Supabase Storage's own download handling rather than just a client-side attribute \u2014 a real fix, since these files live on a different domain than the site itself, and a plain HTML download attribute alone isn't reliably honoured across origins. The application-documents link was relabelled from \"Open\" to \"Download\" to match what it now actually does. Verified directly: the signed URL request now explicitly asks for a real download using the document's original filename, and the resulting link carries a working download attribute instead of just opening in a new tab.",
     "2.34.1 (2026-08-14) — Both the case-assignment email and the RFQ-approver email just linked to the bare admin login page, leaving whoever clicked to go find the actual case or tender themselves. Both now link straight to the right place \u2014 the case-assignment email opens directly to that specific applicant's drawer, the approver email opens directly to that specific RFQ. This works whether the person is already signed in, needs to sign in first, or is a brand-new employee forced through a first-time password change \u2014 the destination is preserved through all three paths rather than only working for the simplest case. Caught and fixed a real bug in my own first pass at this before shipping: the case-assignment email sends to a staff member, not the applicant, so the existing 'applicantId' field couldn't do double duty as both 'who receives this' and 'which case does this link to' \u2014 needed a genuinely separate field for the link target once I traced it through, or the deep link would have silently never worked despite looking correct in code review. Verified directly: the assignment email payload now carries the correct case reference even though the recipient is staff, and following the resulting link actually opens the right applicant's drawer with the right name and reference showing, not just the admin homepage.",
     "2.34.0 (2026-08-14) — Each applicant's case can now be assigned to one or more staff members, right from the case drawer — a new \"Assigned to\" section above Advance Stage. Assigning someone emails them directly that this specific case needs their attention, naming the applicant, reference, and current stage. This mirrors the RFQ-level approver assignment already in the system, just scoped down to an individual case instead of a whole tender, and works the same way deliberately: assignment is about visibility and notification, not a new access restriction \u2014 anyone with the right permission can still act on a case regardless of who's assigned to it. Multiple people can be assigned at once (the dropdown only offers staff not already assigned), and each person can be removed individually without affecting the others or sending any email. Verified directly: the dropdown correctly excludes already-assigned staff, assigning someone persists to the database and sends exactly one email to the right person with the right case details, assigning a second person doesn't re-notify the first, and removing someone updates correctly with no email sent.",
@@ -1276,6 +1277,88 @@ async function removeAssignee(applicantId, employeeId){
   if(error){ console.error('assignee removal persist failed', error); toast("Not saved to database", "The change shows locally but failed to save — check the console."); }
 }
 
+function renderInfoRequestsSection(a){
+  const el = document.getElementById('ad-info-requests');
+  if(!el) return;
+  const requests = a.infoRequests || [];
+  const stageIdx = KANBAN_STAGES.indexOf(a.status);
+  const canRequest = stageIdx >= KANBAN_STAGES.indexOf('Proposal Submitted') &&
+    (can('can_screen_validate') || can('can_evaluate_approve') || can('can_manage_contracts') || can('can_review_documents'));
+
+  let html = '';
+  if(requests.length){
+    html += `<h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Requests for more information</h3>`;
+    html += requests.slice().reverse().map(r=>`
+      <div style="background:var(--paper-2); border-radius:var(--radius); padding:10px 12px; margin-bottom:8px;">
+        <div style="font-weight:600; font-size:12.5px;">${escapeAttr(r.question)}</div>
+        <div style="font-size:11px; color:var(--ink-3); margin-top:3px;">Requested ${(r.requestedAt||'').slice(0,10)} by ${escapeAttr(r.requestedBy||'')}</div>
+        ${r.response ? `
+          <div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--line);">
+            <div style="font-size:12px; color:var(--sage); font-weight:600;">✓ Response received ${(r.response.respondedAt||'').slice(0,10)}</div>
+            <div style="font-size:12.5px; margin-top:4px;">${escapeAttr(r.response.text)}</div>
+            ${(r.response.documents&&r.response.documents.length) ? `<div id="ir-docs-${r.id}" style="margin-top:6px; font-size:12px;">Loading document links…</div>` : ''}
+          </div>
+        ` : `<div style="font-size:12px; color:var(--gold); margin-top:6px;">⏳ Awaiting response</div>`}
+      </div>
+    `).join('');
+  }
+  if(canRequest){
+    html += `<button class="btn small secondary" onclick="openInfoRequestModal('${a.id}')" style="margin-top:4px;">+ Request more information</button>`;
+  }
+  el.innerHTML = html;
+
+  requests.forEach(r=>{
+    if(r.response && r.response.documents && r.response.documents.length){
+      Promise.all(r.response.documents.map(async d=>{
+        try{
+          const { data, error } = await sb.storage.from('applicant-documents').createSignedUrl(d.path, 600, { download: d.fileName });
+          return { name:d.fileName, url: (!error && data) ? data.signedUrl : null };
+        } catch(e){ console.error('signed url failed for info-response doc', d.path, e); return { name:d.fileName, url:null }; }
+      })).then(resolved=>{
+        const docsEl = document.getElementById(`ir-docs-${r.id}`);
+        if(!docsEl) return;
+        docsEl.innerHTML = resolved.map(d=>
+          d.url ? `<div><a href="${d.url}" download="${escapeAttr(d.name)}" rel="noopener">${escapeAttr(d.name)}</a></div>` : `<div>${escapeAttr(d.name)} <span style="color:var(--ink-3);">(link unavailable)</span></div>`
+        ).join('');
+      });
+    }
+  });
+}
+let infoRequestApplicantId = null;
+function openInfoRequestModal(applicantId){
+  const a = applicants.find(x=>x.id===applicantId);
+  if(!a) return;
+  infoRequestApplicantId = applicantId;
+  document.getElementById('ir-context').textContent = `${a.business} (${a.id}) — ${rfqTitle(a.rfq)}`;
+  document.getElementById('ir-question').value = '';
+  document.getElementById('modal-info-request').classList.add('active');
+  document.getElementById('overlay').classList.add('active');
+}
+async function submitInfoRequest(){
+  const a = applicants.find(x=>x.id===infoRequestApplicantId);
+  if(!a) return;
+  const question = document.getElementById('ir-question').value.trim();
+  if(!question){ toast("Question required", "Please describe what you need from the applicant."); return; }
+  const token = generateSecureToken();
+  const newRequest = { id: uniqueId('IR'), token, question, requestedBy: (currentEmployee&&currentEmployee.email)||'Unknown', requestedAt: new Date().toISOString(), response: null };
+  const previousRequests = a.infoRequests || [];
+  a.infoRequests = [...previousRequests, newRequest];
+  const { error } = await sb.from('rfq_applicants').update({ info_requests: a.infoRequests }).eq('id', a.id);
+  if(error){
+    console.error('info request persist failed', error);
+    toast("Not saved to database", "Could not save this request — check the console.");
+    a.infoRequests = previousRequests;
+    return;
+  }
+  closeAll();
+  renderInfoRequestsSection(a);
+  toast("Request sent", `${a.business} has been emailed asking for more information.`);
+  sb.functions.invoke('send-notification-email', { body: {
+    trigger: 'info_requested', applicantId: a.id, infoRequestToken: token, question,
+    triggeredBy: (currentEmployee&&currentEmployee.email)||'system',
+  } }).then(({data,error:emailErr})=>{ if(emailErr||!data||!data.success) console.error('info_requested email failed', emailErr||data); });
+}
+
 async function openApplicant(id){
   const a = applicants.find(x=>x.id===id);
   if(!a) return;
@@ -1296,6 +1379,7 @@ async function openApplicant(id){
 
   renderProposalSection(a);
   renderAssignedSection(a);
+  renderInfoRequestsSection(a);
 
   const docs = a.documents || [];
   document.getElementById('applicant-drawer').classList.add('active');
@@ -2328,6 +2412,12 @@ async function initPublicPage(){
     document.getElementById('proposal-submit-view').style.display = 'block';
     return initProposalSubmitView(submitToken);
   }
+  const infoToken = new URLSearchParams(location.search).get('infoRequest');
+  if(infoToken){
+    document.getElementById('public-view').style.display = 'none';
+    document.getElementById('info-response-view').style.display = 'block';
+    return initInfoResponseView(infoToken);
+  }
   try{
     await loadPublicData();
   } catch(e){
@@ -2467,6 +2557,128 @@ async function submitProposalForm(){
       </div>`;
   } catch(e){
     console.error('proposal submit failed', e);
+    toast("Couldn't submit", "Something went wrong — please try again.");
+  }
+}
+
+/* ============================================================
+   INFO REQUEST RESPONSE — the secure-link page an applicant lands
+   on to answer a staff request for more information/documents.
+   ============================================================ */
+let infoResponseToken = null;
+let infoResponseDocState = [];
+
+async function initInfoResponseView(token){
+  infoResponseToken = token;
+  const contextEl = document.getElementById('ir-pub-context');
+  const bodyEl = document.getElementById('ir-pub-body');
+  try{
+    const { data, error } = await sb.functions.invoke('submit-info-response', { body: { action:'lookup', token } });
+    if(error || !data || data.error || !data.success){
+      contextEl.textContent = '';
+      bodyEl.innerHTML = `<div style="padding:16px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); color:var(--rust);">${escapeAttr((data&&data.error)||'This link is invalid or has expired. Please contact the procurement team if you believe this is a mistake.')}</div>`;
+      return;
+    }
+    contextEl.textContent = `${data.business} — ${data.rfqTitle} (${data.rfqId})`;
+    if(data.alreadyAnswered){
+      const r = data.response;
+      bodyEl.innerHTML = `
+        <div style="padding:16px; background:var(--paper-2); border-radius:var(--radius);">
+          <strong>A response has already been submitted for this request.</strong>
+          ${r ? `<div style="margin-top:10px; font-size:13px; color:var(--ink-2);">
+            <div>Your response: ${escapeAttr(r.text)}</div>
+            <div style="margin-top:4px;">Submitted: ${(r.respondedAt||'').slice(0,10)}</div>
+          </div>` : ''}
+          <p style="margin-top:10px; font-size:13px; color:var(--ink-2);">If you need to add anything further, please contact the procurement team directly.</p>
+        </div>`;
+      return;
+    }
+    infoResponseDocState = [];
+    bodyEl.innerHTML = `
+      <div style="padding:14px 16px; background:#FCF3DE; border:1px solid var(--gold); border-radius:var(--radius); font-size:13.5px; color:var(--ink); margin-bottom:16px; line-height:1.5;">
+        Our procurement team has requested the following:
+        <div style="margin-top:8px; font-weight:700;">${escapeAttr(data.question)}</div>
+      </div>
+      <label>Your response</label>
+      <textarea id="ir-pub-response" placeholder="Type your response here" style="min-height:110px;"></textarea>
+      <label style="margin-top:12px;">Supporting documents (optional)</label>
+      <div id="ir-pub-doc-list"></div>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" onchange="handleInfoResponseFile(this)"></label>
+      <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Attach any documents that support your response, if relevant — this is optional.</p>
+      <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitInfoResponseForm()">Submit Response</button>
+    `;
+    renderInfoResponseDocList();
+  } catch(e){
+    console.error('info response lookup failed', e);
+    bodyEl.innerHTML = `<div style="padding:16px; background:#FBEAE6; border:1px solid var(--rust); border-radius:var(--radius); color:var(--rust);">Couldn't load this page — check your connection and try again.</div>`;
+  }
+}
+function renderInfoResponseDocList(){
+  const el = document.getElementById('ir-pub-doc-list');
+  if(!el) return;
+  el.innerHTML = infoResponseDocState.map((d,i)=>`
+    <div class="field-row" style="align-items:center;">
+      <span class="fname">${d.uploading ? 'Uploading…' : escapeAttr(d.fileName)}</span>
+      <button class="btn small secondary" onclick="removeInfoResponseDoc(${i})" ${d.uploading?'disabled':''}>Remove</button>
+    </div>`).join('');
+  const addLabel = document.getElementById('ir-pub-add-doc-label');
+  if(addLabel) addLabel.textContent = infoResponseDocState.length ? '+ Add another document' : 'Add a document';
+}
+function removeInfoResponseDoc(i){
+  infoResponseDocState.splice(i,1);
+  renderInfoResponseDocList();
+}
+async function handleInfoResponseFile(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  input.value = '';
+  const idx = infoResponseDocState.length;
+  infoResponseDocState.push({fileName:file.name, filePath:null, uploading:true});
+  renderInfoResponseDocList();
+
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `info-responses/${infoResponseToken}/${Date.now()}_${safeName}`;
+  try{
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('path', path);
+    const { data, error } = await sb.functions.invoke('upload-document', { body: formData });
+    if(error){
+      let message = error.message;
+      if(error.context && typeof error.context.json === 'function'){
+        try{ const body = await error.context.json(); message = body.error || message; } catch(e2){ /* ignore */ }
+      }
+      throw new Error(message);
+    }
+    if(data && data.error) throw new Error(data.error);
+    infoResponseDocState[idx].filePath = path;
+  } catch(e){
+    console.error('info response document upload failed', e);
+    toast("Upload failed", `Could not upload ${file.name} — please try again.`);
+    infoResponseDocState.splice(idx,1);
+  }
+  infoResponseDocState[idx] && (infoResponseDocState[idx].uploading = false);
+  renderInfoResponseDocList();
+}
+async function submitInfoResponseForm(){
+  const responseText = document.getElementById('ir-pub-response').value.trim();
+  if(!responseText){ toast("Response required", "Please enter a response before submitting."); return; }
+  if(infoResponseDocState.some(d=>d.uploading)){ toast("Still uploading", "Please wait for your document(s) to finish uploading."); return; }
+  const documents = infoResponseDocState.filter(d=>d.filePath).map(d=>({fileName:d.fileName, path:d.filePath}));
+
+  try{
+    const { data, error } = await sb.functions.invoke('submit-info-response', { body: { action:'submit', token:infoResponseToken, responseText, documents } });
+    if(error || !data || data.error || !data.success){
+      toast("Couldn't submit", (data&&data.error) || "Something went wrong — please try again.");
+      return;
+    }
+    document.getElementById('ir-pub-body').innerHTML = `
+      <div style="padding:16px; background:#EAF3EC; border:1px solid var(--sage); border-radius:var(--radius); color:var(--sage);">
+        <strong>Your response has been submitted.</strong>
+        <p style="margin-top:8px; font-size:13px;">Thank you — our procurement team has been notified.</p>
+      </div>`;
+  } catch(e){
+    console.error('info response submit failed', e);
     toast("Couldn't submit", "Something went wrong — please try again.");
   }
 }
@@ -2725,6 +2937,6 @@ async function loadFromSupabase(){
   });
 
   rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverId:r.assigned_approver_id||null}));
-  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[]}));
+  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
 }
