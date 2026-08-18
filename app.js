@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.34.1",
+  version: "2.34.2",
   date: "2026-08-14",
   changelog: [
+    "2.34.2 (2026-08-14) — Applicant document links in the case drawer (both the initial application documents and submitted proposal documents) previously just opened the file inline in a new tab, leaving whoever clicked it to figure out how to actually save it. They now trigger a genuine download with the file's real name, using Supabase Storage's own download handling rather than just a client-side attribute \u2014 a real fix, since these files live on a different domain than the site itself, and a plain HTML download attribute alone isn't reliably honoured across origins. The application-documents link was relabelled from \"Open\" to \"Download\" to match what it now actually does. Verified directly: the signed URL request now explicitly asks for a real download using the document's original filename, and the resulting link carries a working download attribute instead of just opening in a new tab.",
     "2.34.1 (2026-08-14) — Both the case-assignment email and the RFQ-approver email just linked to the bare admin login page, leaving whoever clicked to go find the actual case or tender themselves. Both now link straight to the right place \u2014 the case-assignment email opens directly to that specific applicant's drawer, the approver email opens directly to that specific RFQ. This works whether the person is already signed in, needs to sign in first, or is a brand-new employee forced through a first-time password change \u2014 the destination is preserved through all three paths rather than only working for the simplest case. Caught and fixed a real bug in my own first pass at this before shipping: the case-assignment email sends to a staff member, not the applicant, so the existing 'applicantId' field couldn't do double duty as both 'who receives this' and 'which case does this link to' \u2014 needed a genuinely separate field for the link target once I traced it through, or the deep link would have silently never worked despite looking correct in code review. Verified directly: the assignment email payload now carries the correct case reference even though the recipient is staff, and following the resulting link actually opens the right applicant's drawer with the right name and reference showing, not just the admin homepage.",
     "2.34.0 (2026-08-14) — Each applicant's case can now be assigned to one or more staff members, right from the case drawer — a new \"Assigned to\" section above Advance Stage. Assigning someone emails them directly that this specific case needs their attention, naming the applicant, reference, and current stage. This mirrors the RFQ-level approver assignment already in the system, just scoped down to an individual case instead of a whole tender, and works the same way deliberately: assignment is about visibility and notification, not a new access restriction \u2014 anyone with the right permission can still act on a case regardless of who's assigned to it. Multiple people can be assigned at once (the dropdown only offers staff not already assigned), and each person can be removed individually without affecting the others or sending any email. Verified directly: the dropdown correctly excludes already-assigned staff, assigning someone persists to the database and sends exactly one email to the right person with the right case details, assigning a second person doesn't re-notify the first, and removing someone updates correctly with no email sent.",
     "2.33.1 (2026-08-13) — Submitting an application used to just show a small toast that disappeared after a few seconds — easy to miss, and it said nothing about what actually happens next. Applicants now see a proper confirmation screen after applying, staying open until they dismiss it, with their reference number and a clearly set-apart message telling them plainly: their application will be reviewed, and if shortlisted, they'll receive an email with a secure link to submit their full proposal and supporting documents — with a nudge to check spam/junk too. Verified directly with a real rendered screenshot, not just the logic: the modal opens with the correct RFQ title and reference number populated, and the confirmation email still fires exactly as before.",
@@ -1219,14 +1220,14 @@ function renderProposalSection(a){
   const docs = a.proposal.documents || [];
   Promise.all(docs.map(async d=>{
     try{
-      const { data, error } = await sb.storage.from('applicant-documents').createSignedUrl(d.path, 600);
+      const { data, error } = await sb.storage.from('applicant-documents').createSignedUrl(d.path, 600, { download: d.fileName });
       return { name:d.fileName, url: (!error && data) ? data.signedUrl : null };
     } catch(e){ console.error('signed url failed for proposal doc', d.path, e); return { name:d.fileName, url:null }; }
   })).then(resolved=>{
     const docsEl = document.getElementById('ad-proposal-docs');
     if(!docsEl) return;
     docsEl.innerHTML = resolved.length ? resolved.map(d=>
-      d.url ? `<div><a href="${d.url}" target="_blank" rel="noopener">${escapeAttr(d.name)}</a></div>` : `<div>${escapeAttr(d.name)} <span style="color:var(--ink-3); font-size:11px;">(link unavailable)</span></div>`
+      d.url ? `<div><a href="${d.url}" download="${escapeAttr(d.name)}" rel="noopener">${escapeAttr(d.name)}</a></div>` : `<div>${escapeAttr(d.name)} <span style="color:var(--ink-3); font-size:11px;">(link unavailable)</span></div>`
     ).join('') : `<span style="font-size:12px; color:var(--ink-3);">No documents.</span>`;
   });
 }
@@ -1310,7 +1311,7 @@ async function openApplicant(id){
   const signedUrls = {};
   await Promise.all(docs.filter(d=>d.filePath).map(async d=>{
     try{
-      const { data, error } = await sb.storage.from('applicant-documents').createSignedUrl(d.filePath, 600);
+      const { data, error } = await sb.storage.from('applicant-documents').createSignedUrl(d.filePath, 600, { download: d.fileName });
       if(!error && data) signedUrls[d.docId] = data.signedUrl;
     } catch(e){ console.error('signed url failed for', d.filePath, e); }
   }));
@@ -1321,7 +1322,7 @@ async function openApplicant(id){
         <span>${d.name}${d.mandatory? '<span class="req" style="color:var(--rust); font-size:10.5px; margin-left:5px;">Required</span>' : ''}</span>
         ${d.provided
           ? (signedUrls[d.docId]
-              ? `<a href="${signedUrls[d.docId]}" target="_blank" rel="noopener" class="badge sage" style="text-decoration:none;">↗ Open ${d.fileName}</a>`
+              ? `<a href="${signedUrls[d.docId]}" download="${escapeAttr(d.fileName)}" rel="noopener" class="badge sage" style="text-decoration:none;">↓ Download ${d.fileName}</a>`
               : `<span class="badge sage">✓ ${d.fileName}</span>`)
           : `<span class="badge rust">Not provided</span>`}
       </div>
