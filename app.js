@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.35.0",
-  date: "2026-08-14",
+  version: "2.35.1",
+  date: "2026-08-15",
   changelog: [
+    "2.35.1 (2026-08-15) — RFQs can now be assigned to more than one approver, not just one — the same multi-select pattern already used for assigning staff to an individual applicant's case. The New/Edit RFQ form now shows a list of everyone currently assigned with the ability to remove any of them, and a dropdown to add more, only offering staff not already on the list. Only genuinely new additions get emailed that the RFQ needs their attention \u2014 removing someone or re-saving with the same people assigned doesn't re-notify anyone. Existing single-approver assignments were migrated automatically, so nothing already set up was lost in the change. Verified directly: the add dropdown correctly excludes both already-assigned staff and anyone without the right permission, creating an RFQ with two approvers saves both and notifies both, and editing to simultaneously remove one approver and add a different new one correctly ends up with the right final list while only emailing the new person \u2014 not re-notifying whoever was already assigned and stayed.",
     "2.35.0 (2026-08-14) — Staff can now request more information from an applicant, available from Proposal Submitted onward through every later stage. Whoever is handling the case writes what they need in a short modal, and the applicant gets emailed directly with a secure link (no account needed) where they can reply with text and optionally attach supporting documents. The full history of requests and responses shows in the case drawer, each one clearly marked as answered or still awaiting a reply, with document links downloadable the same way submitted proposal documents already are. If the case has an assigned staff member (from the assignment feature), they're emailed the moment a response comes in, with a link straight to the case. This reuses the same secure-link architecture already proven out for proposal submissions, rather than inventing a new pattern. Verified directly across both sides: the request button is correctly hidden before Proposal Submitted and hidden entirely for staff without any relevant permission, a blank request or response is blocked, a real request persists and emails the applicant with the actual question, and the public response page correctly handles an invalid link, an already-answered request, and a fresh one \u2014 including confirming, unlike the proposal form, that a document attachment here is genuinely optional rather than required.",
     "2.34.2 (2026-08-14) — Applicant document links in the case drawer (both the initial application documents and submitted proposal documents) previously just opened the file inline in a new tab, leaving whoever clicked it to figure out how to actually save it. They now trigger a genuine download with the file's real name, using Supabase Storage's own download handling rather than just a client-side attribute \u2014 a real fix, since these files live on a different domain than the site itself, and a plain HTML download attribute alone isn't reliably honoured across origins. The application-documents link was relabelled from \"Open\" to \"Download\" to match what it now actually does. Verified directly: the signed URL request now explicitly asks for a real download using the document's original filename, and the resulting link carries a working download attribute instead of just opening in a new tab.",
     "2.34.1 (2026-08-14) — Both the case-assignment email and the RFQ-approver email just linked to the bare admin login page, leaving whoever clicked to go find the actual case or tender themselves. Both now link straight to the right place \u2014 the case-assignment email opens directly to that specific applicant's drawer, the approver email opens directly to that specific RFQ. This works whether the person is already signed in, needs to sign in first, or is a brand-new employee forced through a first-time password change \u2014 the destination is preserved through all three paths rather than only working for the simplest case. Caught and fixed a real bug in my own first pass at this before shipping: the case-assignment email sends to a staff member, not the applicant, so the existing 'applicantId' field couldn't do double duty as both 'who receives this' and 'which case does this link to' \u2014 needed a genuinely separate field for the link target once I traced it through, or the deep link would have silently never worked despite looking correct in code review. Verified directly: the assignment email payload now carries the correct case reference even though the recipient is staff, and following the resulting link actually opens the right applicant's drawer with the right name and reference showing, not just the admin homepage.",
@@ -867,12 +868,28 @@ function focusRfqInPipeline(id){
 
 let newRfqDocs = [];
 let editingRfqId = null;
-function populateApproverDropdown(selectedId){
-  const sel = document.getElementById('nr-approver');
-  if(!sel) return;
+let newRfqApprovers = [];
+function renderNrApproverList(selectedIds){
+  const listEl = document.getElementById('nr-approver-list');
+  const addSel = document.getElementById('nr-approver-add');
+  if(!listEl || !addSel) return;
+  newRfqApprovers = (selectedIds || []).slice();
   const eligible = employees.filter(e => e.can_publish_rfqs);
-  sel.innerHTML = `<option value="">No one assigned</option>` + eligible.map(e=>`<option value="${e.id}">${escapeAttr(e.name)} (${escapeAttr(e.position||e.email)})</option>`).join('');
-  sel.value = selectedId || '';
+  listEl.innerHTML = newRfqApprovers.length ? newRfqApprovers.map(empId=>{
+    const emp = eligible.find(e=>e.id===empId) || employees.find(e=>e.id===empId);
+    const label = emp ? emp.name : 'Unknown staff member';
+    return `<div class="field-row" style="align-items:center;"><span>${escapeAttr(label)}</span><button class="btn small secondary" onclick="removeNrApprover('${empId}')">Remove</button></div>`;
+  }).join('') : `<span style="font-size:12px; color:var(--ink-3);">No one assigned.</span>`;
+  const remaining = eligible.filter(e => !newRfqApprovers.includes(e.id));
+  addSel.innerHTML = `<option value="">+ Assign someone…</option>` + remaining.map(e=>`<option value="${e.id}">${escapeAttr(e.name)} (${escapeAttr(e.position||e.email)})</option>`).join('');
+}
+function addNrApprover(employeeId){
+  if(!newRfqApprovers.includes(employeeId)) newRfqApprovers.push(employeeId);
+  renderNrApproverList(newRfqApprovers);
+}
+function removeNrApprover(employeeId){
+  newRfqApprovers = newRfqApprovers.filter(id=>id!==employeeId);
+  renderNrApproverList(newRfqApprovers);
 }
 function openNewRfq(){
   editingRfqId = null;
@@ -887,7 +904,7 @@ function openNewRfq(){
   document.getElementById('nr-open').value='';
   document.getElementById('nr-close').value='';
   document.getElementById('nr-desc').value='';
-  populateApproverDropdown(null);
+  renderNrApproverList([]);
   renderNrDocList();
   renderNrAttachList();
   document.getElementById('modal-newrfq').classList.add('active'); document.getElementById('overlay').classList.add('active');
@@ -908,7 +925,7 @@ function openEditRfq(id){
   document.getElementById('nr-open').value = r.open||'';
   document.getElementById('nr-close').value = toDatetimeLocalValue(r.close);
   document.getElementById('nr-desc').value = r.desc||'';
-  populateApproverDropdown(r.assignedApproverId);
+  renderNrApproverList(r.assignedApproverIds || []);
   renderNrDocList();
   renderNrAttachList();
   document.getElementById('modal-newrfq').classList.add('active'); document.getElementById('overlay').classList.add('active');
@@ -986,12 +1003,12 @@ async function createRfq(){
   const title = document.getElementById('nr-title').value.trim();
   if(!title){ toast("Missing title","Give this RFQ a title before saving."); return; }
   if(newRfqAttachments.some(f=>f.uploading)){ toast("Still uploading","Please wait for tender document uploads to finish before saving."); return; }
-  const selectedApproverId = document.getElementById('nr-approver').value || null;
+  const selectedApproverIds = newRfqApprovers.slice();
 
   if(editingRfqId){
     const r = rfqs.find(x=>x.id===editingRfqId);
     if(!r){ toast("Not found","Could not find that RFQ to update."); closeAll(); return; }
-    const previousApproverId = r.assignedApproverId || null;
+    const previousApproverIds = r.assignedApproverIds || [];
     r.title = title;
     r.category = document.getElementById('nr-category').value||"General";
     r.budget = Number(document.getElementById('nr-budget').value)||0;
@@ -1000,14 +1017,15 @@ async function createRfq(){
     r.desc = document.getElementById('nr-desc').value||"";
     r.requiredDocs = newRfqDocs.slice();
     r.attachments = newRfqAttachments.map(f=>({name:f.name, path:f.path}));
-    r.assignedApproverId = selectedApproverId;
+    r.assignedApproverIds = selectedApproverIds;
     renderRfqs();
     logAudit(`${r.id} edited (still Draft)`,"Procurement Manager");
     closeAll();
     toast("RFQ updated", `${r.id} has been saved.`);
-    const { error } = await sb.from('rfq_rfqs').update({title:r.title, category:r.category, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_id:r.assignedApproverId}).eq('id', r.id);
+    const { error } = await sb.from('rfq_rfqs').update({title:r.title, category:r.category, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_ids:r.assignedApproverIds}).eq('id', r.id);
     if(error){ console.error('editRfq persist failed', error); toast("Not saved to database", "The change shows locally but failed to save to Supabase — check the console."); return; }
-    if(selectedApproverId && selectedApproverId !== previousApproverId) notifyAssignedApprover(r, 'This RFQ is a Draft awaiting your review and publishing.');
+    const newlyAdded = selectedApproverIds.filter(id => !previousApproverIds.includes(id));
+    if(newlyAdded.length) notifyAssignedApprovers(r, newlyAdded, 'This RFQ is a Draft awaiting your review and publishing.');
     return;
   }
 
@@ -1017,24 +1035,26 @@ async function createRfq(){
     budget:Number(document.getElementById('nr-budget').value)||0, status:"Draft",
     open:document.getElementById('nr-open').value||today(), close:fromDatetimeLocalValue(document.getElementById('nr-close').value) || defaultCloseDateTime(21),
     desc:document.getElementById('nr-desc').value||"", requiredDocs:newRfqDocs.slice(),
-    attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path})), assignedApproverId:selectedApproverId};
+    attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path})), assignedApproverIds:selectedApproverIds};
   rfqs.unshift(r);
   populateRfqFilter();
   logAudit(`${id} created as Draft with ${newRfqDocs.length} required document(s)`,"Procurement Manager");
   closeAll();
   toast("RFQ saved", `${id} created as a Draft. Publishing requires sign-off.`);
   switchView('rfqs');
-  const { error } = await sb.from('rfq_rfqs').insert({id:r.id, title:r.title, category:r.category, status:r.status, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_id:r.assignedApproverId});
+  const { error } = await sb.from('rfq_rfqs').insert({id:r.id, title:r.title, category:r.category, status:r.status, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_ids:r.assignedApproverIds});
   if(error){ console.error('createRfq persist failed', error); toast("Not saved to database", "The RFQ shows locally but failed to save to Supabase — check the console."); return; }
-  if(selectedApproverId) notifyAssignedApprover(r, 'This new RFQ is a Draft awaiting your review and publishing.');
+  if(selectedApproverIds.length) notifyAssignedApprovers(r, selectedApproverIds, 'This new RFQ is a Draft awaiting your review and publishing.');
 }
-function notifyAssignedApprover(r, message){
-  const approver = employees.find(e => e.id === r.assignedApproverId);
-  if(!approver || !approver.email) return;
-  sb.functions.invoke('send-notification-email', { body: {
-    trigger: 'rfq_approval_needed', recipientEmail: approver.email, recipientName: approver.name, rfqId: r.id,
-    customMessage: message, triggeredBy: (currentEmployee&&currentEmployee.email)||'system',
-  } }).then(({data,error})=>{ if(error||!data||!data.success) console.error('approver notification failed', error||data); });
+function notifyAssignedApprovers(r, approverIds, message){
+  approverIds.forEach(id=>{
+    const approver = employees.find(e => e.id === id);
+    if(!approver || !approver.email) return;
+    sb.functions.invoke('send-notification-email', { body: {
+      trigger: 'rfq_approval_needed', recipientEmail: approver.email, recipientName: approver.name, rfqId: r.id,
+      customMessage: message, triggeredBy: (currentEmployee&&currentEmployee.email)||'system',
+    } }).then(({data,error})=>{ if(error||!data||!data.success) console.error('approver notification failed', error||data); });
+  });
 }
 
 /* ============================================================
@@ -1662,7 +1682,7 @@ function submitRfqStatusRequest(){
   closeAll();
   renderRfqs();
   toast("Submitted for review", `${r.id}'s status change now needs approval before it takes effect.`);
-  if(r.assignedApproverId) notifyAssignedApprover(r, `A status change to "${targetStatus}" has been requested on this RFQ and needs your approval. Reason given: ${reason}`);
+  if((r.assignedApproverIds||[]).length) notifyAssignedApprovers(r, r.assignedApproverIds, `A status change to "${targetStatus}" has been requested on this RFQ and needs your approval. Reason given: ${reason}`);
   sb.from('rfq_rfqs').update({pending_status_change:r.pendingStatusChange}).eq('id', r.id)
     .then(({error})=>{ if(error){ console.error('rfq status request persist failed', error); toast("Not saved to database", "The request shows locally but failed to save — check the console."); } });
 }
@@ -2936,7 +2956,7 @@ async function loadFromSupabase(){
     (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, action:t.action, actor:t.actor, note:t.note||''});
   });
 
-  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverId:r.assigned_approver_id||null}));
+  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[]}));
   applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
 }
