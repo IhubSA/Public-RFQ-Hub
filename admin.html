@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.35.0 (2026-08-14). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.35.1 (2026-08-15). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -336,9 +336,12 @@
       <div style="flex:1;"><label>Opens</label><input type="date" id="nr-open"></div>
       <div style="flex:1;"><label>Closes</label><input type="datetime-local" id="nr-close"></div>
     </div>
-    <label>Assign approver</label>
-    <select id="nr-approver"><option value="">No one assigned</option></select>
-    <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">Only staff with Approve &amp; Publish RFQs permission are listed. Assigning someone (or changing who's assigned) emails them that this RFQ needs their attention.</div>
+    <label>Assign approver(s)</label>
+    <div id="nr-approver-list"></div>
+    <select id="nr-approver-add" onchange="if(this.value) addNrApprover(this.value); this.value='';">
+      <option value="">+ Assign someone…</option>
+    </select>
+    <div style="font-size:11.5px; color:var(--ink-3); margin:4px 0 8px 0;">Only staff with Approve &amp; Publish RFQs permission are listed. Assigning someone new emails them that this RFQ needs their attention.</div>
     <label>Scope summary</label>
     <textarea id="nr-desc" placeholder="Short public-facing description of what's being procured"></textarea>
 
