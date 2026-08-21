@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.35.1 (2026-08-15). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.37.0 (2026-08-21). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -30,7 +30,8 @@
       <div class="tab" data-view="comms"><span class="num">05</span><span class="label">Communications</span></div>
       <div class="tab" data-view="audit"><span class="num">06</span><span class="label">Audit Trail</span></div>
       <div class="tab" data-view="clarifications"><span class="num">07</span><span class="label">Clarifications</span></div>
-      <div class="tab" data-view="employees"><span class="num">08</span><span class="label">System Users &amp; Admin</span></div>
+      <div class="tab" data-view="suppliers"><span class="num">08</span><span class="label">Suppliers</span></div>
+      <div class="tab" data-view="employees"><span class="num">09</span><span class="label">System Users &amp; Admin</span></div>
     </nav>
     <div class="role-toggle">
       <a id="btn-public" href="index.html" target="_blank" rel="noopener" style="display:block; text-align:center; text-decoration:none;">View public portal ↗</a>
@@ -139,6 +140,26 @@
       <div class="panel">
         <div class="panel-body" style="padding:0;">
           <table id="clar-table"></table>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-suppliers">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">Registry</div>
+          <h1>Supplier database</h1>
+          <div class="desc">Businesses registered on the Contractor Hub, synced here automatically — plus anyone added directly. Click a row for their full profile and documents.</div>
+        </div>
+        <button class="btn gold" onclick="openAddSupplier()">+ Add supplier</button>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <input type="text" id="sup-search" placeholder="Search name, company, or email…" oninput="renderSuppliers()" style="max-width:320px;">
+        <select id="sup-filter-province" onchange="renderSuppliers()"><option value="all">All provinces</option></select>
+      </div>
+      <div class="panel">
+        <div class="panel-body" style="padding:0;">
+          <table id="suppliers-table"></table>
         </div>
       </div>
     </section>
@@ -323,6 +344,25 @@
   </div>
 </div>
 
+<div class="drawer" id="supplier-drawer">
+  <div class="drawer-head">
+    <button class="drawer-close" onclick="closeAll()">✕</button>
+    <div class="eyebrow" id="sd-ref"></div>
+    <h2 class="serif" id="sd-company" style="margin:2px 0 4px 0; font-size:19px;"></h2>
+    <div id="sd-status"></div>
+  </div>
+  <div class="drawer-body">
+    <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin-bottom:8px;">Contact details</h3>
+    <div id="sd-contact-fields"></div>
+
+    <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Business profile</h3>
+    <div id="sd-profile-fields"></div>
+
+    <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:22px 0 4px 0;">Compliance documents</h3>
+    <div id="sd-docs"></div>
+  </div>
+</div>
+
 <div class="modal" id="modal-newrfq">
   <div class="modal-head"><h3 id="nr-modal-title">New RFQ record</h3><button class="drawer-close" style="position:static;" onclick="closeAll()">✕</button></div>
   <div class="modal-body">
@@ -450,6 +490,25 @@
   <div class="modal-foot">
     <button class="btn secondary" onclick="closeAll()">Cancel</button>
     <button class="btn gold" onclick="submitInfoRequest()">Send request</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-add-supplier">
+  <div class="modal-head"><h3>Add supplier</h3><button class="drawer-close" style="position:static;" onclick="closeAll()">✕</button></div>
+  <div class="modal-body">
+    <label>Company name</label>
+    <input type="text" id="as-company" placeholder="Registered business name">
+    <label>Contact name</label>
+    <input type="text" id="as-name" placeholder="Name of the person to contact">
+    <label>Email</label>
+    <input type="email" id="as-email" placeholder="contact@company.co.za">
+    <label>Phone</label>
+    <input type="text" id="as-phone" placeholder="e.g. 082 123 4567 (optional)">
+    <p style="font-size:11px; color:var(--ink-3); margin-top:4px;">Used only to notify this business when a new tender is published — not linked to any specific application.</p>
+  </div>
+  <div class="modal-foot">
+    <button class="btn secondary" onclick="closeAll()">Cancel</button>
+    <button class="btn gold" onclick="submitAddSupplier()">Add supplier</button>
   </div>
 </div>
 
