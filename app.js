@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.37.0",
+  version: "2.38.0",
   date: "2026-08-21",
   changelog: [
+    "2.38.0 (2026-08-21) — RFQs can now be tagged with one or more provinces \u2014 a checkbox group in the New/Edit RFQ form covering all nine. This connects two pieces of backend logic that were already fully built but never wired up: the RFQ table already had a provinces column, and the supplier notification function already knew how to province-match, but nothing ever set the provinces or triggered the send automatically. Publishing an RFQ (the Draft \u2192 Open for Applications gate) now automatically emails every active supplier registered in a matching province \u2014 or registered for all provinces \u2014 the moment it goes live, with no separate button press required. The manual Notify Suppliers button still exists for re-sends. Selecting no provinces at all is treated as \"no restriction\" and reaches every active supplier, matching how it already worked before this feature existed. This only touches the publish moment \u2014 pausing, cancelling, extending, or a tender simply closing on its own don't trigger anything, exactly as intended. Verified directly: checkboxes correctly capture and restore a specific province selection across save/reload, publishing a real RFQ with provinces selected updates the database before the notification fires (not after, avoiding a race), and editing an existing RFQ's province selection persists the change correctly.",
     "2.37.0 (2026-08-21) — The Suppliers tab now shows the full profile the underlying database has actually held since the automatic Contractor Hub sync went live \u2014 previously it only ever showed the original lean contact-list fields (name, company, email, phone), even though province, service details, and compliance documents have been flowing in for a while. Every row now shows province and a document count at a glance, with a province filter alongside the existing search. Clicking a row opens a full profile drawer \u2014 contact details, business profile, and every compliance document on file (CIPC, tax clearance, B-BBEE, banking proof, address proof, health & safety, permits) each with a working download link, gated by the same document-review permission used everywhere else documents appear in this system. Staff without that permission still see how many documents are on file, just not the links themselves. Verified directly: the table correctly shows province and document counts per supplier, the province filter populates itself from real data, the drawer shows the complete profile for a richly-populated supplier and a clean 'no documents' state for a sparse one, document links only render for staff with the right permission, and closing the drawer works the same way closing everything else in this app already does.",
     "2.36.0 (2026-08-16) — Added a lean supplier database, purely for sending RFQ notifications \u2014 not a full compliance-document profile like the SMME Procurement Plan's registration form. A new Suppliers tab holds each business's name, company, email and phone, with add and remove actions. 43 existing suppliers were imported from the IhubSA Contractor RFQ System's registration database (with 3 apparent internal/test entries and 2 data-entry anomalies left in as-is rather than silently cleaned up, since that call belongs to whoever manages the list). Each RFQ (once published) now has a Notify Suppliers button that emails everyone currently active in the database about that specific tender, using Resend's batch endpoint rather than firing individual requests, and shows a \u2713 Notified marker with the last-sent time once it's been used, so it's clear whether a tender has already gone out. This directly fills the notification gap flagged during the SMME Procurement Plan review \u2014 email, not SMS, since that's the channel already live in this system. Verified directly: search filtering works, adding a supplier validates required fields and blocks duplicate emails client-side before ever hitting the database, and triggering a notification calls the right RFQ and updates its notified status locally once the send succeeds.",
     "2.35.1 (2026-08-15) — RFQs can now be assigned to more than one approver, not just one — the same multi-select pattern already used for assigning staff to an individual applicant's case. The New/Edit RFQ form now shows a list of everyone currently assigned with the ability to remove any of them, and a dropdown to add more, only offering staff not already on the list. Only genuinely new additions get emailed that the RFQ needs their attention \u2014 removing someone or re-saving with the same people assigned doesn't re-notify anyone. Existing single-approver assignments were migrated automatically, so nothing already set up was lost in the change. Verified directly: the add dropdown correctly excludes both already-assigned staff and anyone without the right permission, creating an RFQ with two approvers saves both and notifies both, and editing to simultaneously remove one approver and add a different new one correctly ends up with the right final list while only emailing the new person \u2014 not re-notifying whoever was already assigned and stayed.",
@@ -896,6 +897,12 @@ function removeNrApprover(employeeId){
   newRfqApprovers = newRfqApprovers.filter(id=>id!==employeeId);
   renderNrApproverList(newRfqApprovers);
 }
+function setNrProvinceCheckboxes(provinces){
+  document.querySelectorAll('.nr-province-cb').forEach(cb=>{ cb.checked = (provinces||[]).includes(cb.value); });
+}
+function getNrProvinceCheckboxes(){
+  return Array.from(document.querySelectorAll('.nr-province-cb')).filter(cb=>cb.checked).map(cb=>cb.value);
+}
 function openNewRfq(){
   editingRfqId = null;
   document.getElementById('nr-modal-title').textContent = 'New RFQ record';
@@ -909,6 +916,7 @@ function openNewRfq(){
   document.getElementById('nr-open').value='';
   document.getElementById('nr-close').value='';
   document.getElementById('nr-desc').value='';
+  setNrProvinceCheckboxes([]);
   renderNrApproverList([]);
   renderNrDocList();
   renderNrAttachList();
@@ -930,6 +938,7 @@ function openEditRfq(id){
   document.getElementById('nr-open').value = r.open||'';
   document.getElementById('nr-close').value = toDatetimeLocalValue(r.close);
   document.getElementById('nr-desc').value = r.desc||'';
+  setNrProvinceCheckboxes(r.provinces || []);
   renderNrApproverList(r.assignedApproverIds || []);
   renderNrDocList();
   renderNrAttachList();
@@ -1009,6 +1018,7 @@ async function createRfq(){
   if(!title){ toast("Missing title","Give this RFQ a title before saving."); return; }
   if(newRfqAttachments.some(f=>f.uploading)){ toast("Still uploading","Please wait for tender document uploads to finish before saving."); return; }
   const selectedApproverIds = newRfqApprovers.slice();
+  const selectedProvinces = getNrProvinceCheckboxes();
 
   if(editingRfqId){
     const r = rfqs.find(x=>x.id===editingRfqId);
@@ -1023,11 +1033,12 @@ async function createRfq(){
     r.requiredDocs = newRfqDocs.slice();
     r.attachments = newRfqAttachments.map(f=>({name:f.name, path:f.path}));
     r.assignedApproverIds = selectedApproverIds;
+    r.provinces = selectedProvinces;
     renderRfqs();
     logAudit(`${r.id} edited (still Draft)`,"Procurement Manager");
     closeAll();
     toast("RFQ updated", `${r.id} has been saved.`);
-    const { error } = await sb.from('rfq_rfqs').update({title:r.title, category:r.category, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_ids:r.assignedApproverIds}).eq('id', r.id);
+    const { error } = await sb.from('rfq_rfqs').update({title:r.title, category:r.category, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_ids:r.assignedApproverIds, provinces:r.provinces}).eq('id', r.id);
     if(error){ console.error('editRfq persist failed', error); toast("Not saved to database", "The change shows locally but failed to save to Supabase — check the console."); return; }
     const newlyAdded = selectedApproverIds.filter(id => !previousApproverIds.includes(id));
     if(newlyAdded.length) notifyAssignedApprovers(r, newlyAdded, 'This RFQ is a Draft awaiting your review and publishing.');
@@ -1040,14 +1051,14 @@ async function createRfq(){
     budget:Number(document.getElementById('nr-budget').value)||0, status:"Draft",
     open:document.getElementById('nr-open').value||today(), close:fromDatetimeLocalValue(document.getElementById('nr-close').value) || defaultCloseDateTime(21),
     desc:document.getElementById('nr-desc').value||"", requiredDocs:newRfqDocs.slice(),
-    attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path})), assignedApproverIds:selectedApproverIds};
+    attachments:newRfqAttachments.map(f=>({name:f.name, path:f.path})), assignedApproverIds:selectedApproverIds, provinces:selectedProvinces};
   rfqs.unshift(r);
   populateRfqFilter();
   logAudit(`${id} created as Draft with ${newRfqDocs.length} required document(s)`,"Procurement Manager");
   closeAll();
   toast("RFQ saved", `${id} created as a Draft. Publishing requires sign-off.`);
   switchView('rfqs');
-  const { error } = await sb.from('rfq_rfqs').insert({id:r.id, title:r.title, category:r.category, status:r.status, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_ids:r.assignedApproverIds});
+  const { error } = await sb.from('rfq_rfqs').insert({id:r.id, title:r.title, category:r.category, status:r.status, budget:r.budget, open_date:r.open, close_date:r.close, description:r.desc, required_docs:r.requiredDocs, attachments:r.attachments||[], assigned_approver_ids:r.assignedApproverIds, provinces:r.provinces});
   if(error){ console.error('createRfq persist failed', error); toast("Not saved to database", "The RFQ shows locally but failed to save to Supabase — check the console."); return; }
   if(selectedApproverIds.length) notifyAssignedApprovers(r, selectedApproverIds, 'This new RFQ is a Draft awaiting your review and publishing.');
 }
@@ -1956,7 +1967,11 @@ async function notifySuppliers(rfqId){
   }
   r.supplierNotifiedAt = new Date().toISOString();
   renderRfqs();
-  toast("Suppliers notified", `${data.sent} of ${data.totalSuppliers} supplier${data.totalSuppliers===1?'':'s'} emailed about ${r.id}.`);
+  if(data.totalSuppliers === 0){
+    toast("No matching suppliers", `No active suppliers are registered for this RFQ's selected province(s) — nothing was sent.`);
+  } else {
+    toast("Suppliers notified", `${data.sent} of ${data.totalSuppliers} supplier${data.totalSuppliers===1?'':'s'} emailed about ${r.id}.`);
+  }
 }
 
 let clarAnswerId = null;
@@ -2013,9 +2028,18 @@ async function submitApproval(isApprove){
     if(isApprove){
       r.status = "Open for Applications";
       logAudit(`${r.id} published — now open for applications`, `${name} · ${role}`, comment);
-      toast("RFQ published", `${r.title} is now visible on the public portal.`);
-      sb.from('rfq_rfqs').update({status:r.status}).eq('id', r.id)
-        .then(({error})=>{ if(error){ console.error('rfq publish persist failed', error); toast("Not saved to database", `${r.id} published locally but failed to save — check the console.`); } });
+      closeAll();
+      renderRfqs();
+      renderDashboard();
+      const { error } = await sb.from('rfq_rfqs').update({status:r.status}).eq('id', r.id);
+      if(error){
+        console.error('rfq publish persist failed', error);
+        toast("Not saved to database", `${r.id} published locally but failed to save — check the console.`);
+        return;
+      }
+      toast("RFQ published", `${r.title} is now visible on the public portal. Notifying matching suppliers…`);
+      notifySuppliers(r.id);
+      return;
     }
     closeAll();
     renderRfqs();
@@ -3120,7 +3144,7 @@ async function loadFromSupabase(){
     (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, action:t.action, actor:t.actor, note:t.note||''});
   });
 
-  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[], supplierNotifiedAt:r.supplier_notification_sent_at||null}));
+  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[], supplierNotifiedAt:r.supplier_notification_sent_at||null, provinces:r.provinces||[]}));
   applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
   suppliers = (supRes.data||[]).map(s=>({
