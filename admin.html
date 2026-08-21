@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.37.0 (2026-08-21). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.38.0 (2026-08-21). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -376,6 +376,19 @@
       <div style="flex:1;"><label>Opens</label><input type="date" id="nr-open"></div>
       <div style="flex:1;"><label>Closes</label><input type="datetime-local" id="nr-close"></div>
     </div>
+    <label>Province(s)</label>
+    <div id="nr-provinces" style="display:flex; flex-wrap:wrap; gap:6px 16px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius); margin-bottom:4px;">
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Eastern Cape" style="width:auto;"> Eastern Cape</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Free State" style="width:auto;"> Free State</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Gauteng" style="width:auto;"> Gauteng</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="KwaZulu-Natal" style="width:auto;"> KwaZulu-Natal</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Limpopo" style="width:auto;"> Limpopo</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Mpumalanga" style="width:auto;"> Mpumalanga</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Northern Cape" style="width:auto;"> Northern Cape</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="North West" style="width:auto;"> North West</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Western Cape" style="width:auto;"> Western Cape</label>
+    </div>
+    <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">Select where this tender applies. When published, suppliers registered in any of these provinces (or registered for all provinces) are emailed automatically. Leave none selected to notify every active supplier regardless of province.</div>
     <label>Assign approver(s)</label>
     <div id="nr-approver-list"></div>
     <select id="nr-approver-add" onchange="if(this.value) addNrApprover(this.value); this.value='';">
