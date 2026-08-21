@@ -9,9 +9,11 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.35.1",
-  date: "2026-08-15",
+  version: "2.37.0",
+  date: "2026-08-21",
   changelog: [
+    "2.37.0 (2026-08-21) — The Suppliers tab now shows the full profile the underlying database has actually held since the automatic Contractor Hub sync went live \u2014 previously it only ever showed the original lean contact-list fields (name, company, email, phone), even though province, service details, and compliance documents have been flowing in for a while. Every row now shows province and a document count at a glance, with a province filter alongside the existing search. Clicking a row opens a full profile drawer \u2014 contact details, business profile, and every compliance document on file (CIPC, tax clearance, B-BBEE, banking proof, address proof, health & safety, permits) each with a working download link, gated by the same document-review permission used everywhere else documents appear in this system. Staff without that permission still see how many documents are on file, just not the links themselves. Verified directly: the table correctly shows province and document counts per supplier, the province filter populates itself from real data, the drawer shows the complete profile for a richly-populated supplier and a clean 'no documents' state for a sparse one, document links only render for staff with the right permission, and closing the drawer works the same way closing everything else in this app already does.",
+    "2.36.0 (2026-08-16) — Added a lean supplier database, purely for sending RFQ notifications \u2014 not a full compliance-document profile like the SMME Procurement Plan's registration form. A new Suppliers tab holds each business's name, company, email and phone, with add and remove actions. 43 existing suppliers were imported from the IhubSA Contractor RFQ System's registration database (with 3 apparent internal/test entries and 2 data-entry anomalies left in as-is rather than silently cleaned up, since that call belongs to whoever manages the list). Each RFQ (once published) now has a Notify Suppliers button that emails everyone currently active in the database about that specific tender, using Resend's batch endpoint rather than firing individual requests, and shows a \u2713 Notified marker with the last-sent time once it's been used, so it's clear whether a tender has already gone out. This directly fills the notification gap flagged during the SMME Procurement Plan review \u2014 email, not SMS, since that's the channel already live in this system. Verified directly: search filtering works, adding a supplier validates required fields and blocks duplicate emails client-side before ever hitting the database, and triggering a notification calls the right RFQ and updates its notified status locally once the send succeeds.",
     "2.35.1 (2026-08-15) — RFQs can now be assigned to more than one approver, not just one — the same multi-select pattern already used for assigning staff to an individual applicant's case. The New/Edit RFQ form now shows a list of everyone currently assigned with the ability to remove any of them, and a dropdown to add more, only offering staff not already on the list. Only genuinely new additions get emailed that the RFQ needs their attention \u2014 removing someone or re-saving with the same people assigned doesn't re-notify anyone. Existing single-approver assignments were migrated automatically, so nothing already set up was lost in the change. Verified directly: the add dropdown correctly excludes both already-assigned staff and anyone without the right permission, creating an RFQ with two approvers saves both and notifies both, and editing to simultaneously remove one approver and add a different new one correctly ends up with the right final list while only emailing the new person \u2014 not re-notifying whoever was already assigned and stayed.",
     "2.35.0 (2026-08-14) — Staff can now request more information from an applicant, available from Proposal Submitted onward through every later stage. Whoever is handling the case writes what they need in a short modal, and the applicant gets emailed directly with a secure link (no account needed) where they can reply with text and optionally attach supporting documents. The full history of requests and responses shows in the case drawer, each one clearly marked as answered or still awaiting a reply, with document links downloadable the same way submitted proposal documents already are. If the case has an assigned staff member (from the assignment feature), they're emailed the moment a response comes in, with a link straight to the case. This reuses the same secure-link architecture already proven out for proposal submissions, rather than inventing a new pattern. Verified directly across both sides: the request button is correctly hidden before Proposal Submitted and hidden entirely for staff without any relevant permission, a blank request or response is blocked, a real request persists and emails the applicant with the actual question, and the public response page correctly handles an invalid link, an already-answered request, and a fresh one \u2014 including confirming, unlike the proposal form, that a document attachment here is genuinely optional rather than required.",
     "2.34.2 (2026-08-14) — Applicant document links in the case drawer (both the initial application documents and submitted proposal documents) previously just opened the file inline in a new tab, leaving whoever clicked it to figure out how to actually save it. They now trigger a genuine download with the file's real name, using Supabase Storage's own download handling rather than just a client-side attribute \u2014 a real fix, since these files live on a different domain than the site itself, and a plain HTML download attribute alone isn't reliably honoured across origins. The application-documents link was relabelled from \"Open\" to \"Download\" to match what it now actually does. Verified directly: the signed URL request now explicitly asks for a real download using the document's original filename, and the resulting link carries a working download attribute instead of just opening in a new tab.",
@@ -211,6 +213,7 @@ function logAudit(action, who, note){
 
 let rfqs = [];
 let applicants = [];
+let suppliers = [];
 
 function docReq(name, mandatory){ return {id:uid("DOC"), name, mandatory:mandatory!==false}; }
 
@@ -324,6 +327,7 @@ function switchView(name){
   if(name==='audit') renderAudit();
   if(name==='employees') renderEmployees();
   if(name==='clarifications') renderClarifications();
+  if(name==='suppliers') renderSuppliers();
 }
 document.querySelectorAll('#tabs .tab').forEach(t=>t.addEventListener('click',()=>switchView(t.dataset.view)));
 
@@ -856,6 +860,7 @@ function renderRfqs(){
         ${r.pendingStatusChange && can('can_publish_rfqs') ? `<button class="btn small gold" onclick="event.stopPropagation(); openRfqStatusReview('${r.id}')">Review</button>` : ''}
         ${!r.pendingStatusChange && r.status!=="Draft" && can('can_manage_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); openRfqStatusRequest('${r.id}')">Change status</button>` : ''}
         ${["Open for Applications","Published"].includes(r.status) && can('can_publish_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); openExtendDate('${r.id}')">Extend date</button>` : ''}
+        ${r.status!=="Draft" && can('can_manage_rfqs') ? `<button class="btn small secondary" onclick="event.stopPropagation(); notifySuppliers('${r.id}')" title="${r.supplierNotifiedAt ? 'Last notified '+formatCloseDisplay(r.supplierNotifiedAt) : ''}">${r.supplierNotifiedAt ? '✓ Notified' : 'Notify Suppliers'}</button>` : ''}
       </td></tr>`;
     }).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--ink-3); padding:20px;">No RFQs match these filters.</td></tr>`}
   `;
@@ -1799,6 +1804,161 @@ async function renderClarifications(){
     </tr>`).join('') || `<tr><td colspan="5" style="text-align:center; color:var(--ink-3); padding:20px;">No clarification requests yet.</td></tr>`}
   `;
 }
+
+function supplierDocCount(s){
+  return ['cipcDocumentPath','proofOfAddressDocumentPath','sarsDocumentPath','proofOfBankingDocumentPath','bbbeeDocumentPath','healthSafetyDocumentPath','specialPermitsDocumentPath']
+    .filter(k=>s[k]).length + (Array.isArray(s.otherDocuments) ? s.otherDocuments.length : 0);
+}
+function renderSuppliers(){
+  const table = document.getElementById('suppliers-table');
+  if(!table) return;
+  const provinceSel = document.getElementById('sup-filter-province');
+  if(provinceSel && provinceSel.options.length <= 1){
+    const provinces = Array.from(new Set(suppliers.map(s=>s.province).filter(Boolean))).sort();
+    provinceSel.innerHTML = `<option value="all">All provinces</option>` + provinces.map(p=>`<option value="${escapeAttr(p)}">${escapeAttr(p)}</option>`).join('');
+  }
+  const q = (document.getElementById('sup-search')||{}).value?.trim().toLowerCase() || '';
+  const provinceFilter = (provinceSel && provinceSel.value) || 'all';
+  const list = suppliers.filter(s =>
+    (!q || s.name.toLowerCase().includes(q) || s.companyName.toLowerCase().includes(q) || s.email.toLowerCase().includes(q)) &&
+    (provinceFilter==='all' || s.province===provinceFilter || s.province==='ALL')
+  );
+  const canManage = can('can_manage_rfqs');
+  table.innerHTML = `
+    <tr><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th>Province</th><th>Docs</th><th>Status</th><th></th></tr>
+    ${list.map(s=>{
+      const docCount = supplierDocCount(s);
+      return `<tr class="rowlink" onclick="openSupplierDrawer('${s.id}')">
+      <td>${escapeAttr(s.companyName)}</td>
+      <td>${escapeAttr(s.name)}</td>
+      <td class="mono">${escapeAttr(s.email)}</td>
+      <td class="mono">${escapeAttr(s.phone)||'—'}</td>
+      <td>${escapeAttr(s.province)||'—'}</td>
+      <td>${docCount ? `<span class="badge sage">${docCount}</span>` : '<span style="color:var(--ink-3);">—</span>'}</td>
+      <td><span class="badge ${s.status==='active'?'sage':'ink'}">${s.status==='active'?'Active':'Unsubscribed'}</span></td>
+      <td>${canManage ? `<button class="btn small secondary" onclick="event.stopPropagation(); removeSupplier('${s.id}')">Remove</button>` : ''}</td>
+    </tr>`;
+    }).join('') || `<tr><td colspan="8" style="text-align:center; color:var(--ink-3); padding:20px;">${q || provinceFilter!=='all' ? 'No suppliers match these filters.' : 'No suppliers in the database yet.'}</td></tr>`}
+  `;
+}
+function openSupplierDrawer(id){
+  const s = suppliers.find(x=>x.id===id);
+  if(!s) return;
+  document.getElementById('sd-ref').textContent = s.source==='self' ? 'Self-registered on Contractor Hub' : s.source==='imported' ? 'Bulk imported' : 'Added manually';
+  document.getElementById('sd-company').textContent = s.companyName;
+  document.getElementById('sd-status').innerHTML = `<span class="badge ${s.status==='active'?'sage':'ink'}">${s.status==='active'?'Active':'Unsubscribed'}</span>`;
+
+  document.getElementById('sd-contact-fields').innerHTML = `
+    <div class="field-row"><span class="k">Contact name</span><span>${escapeAttr([s.title,s.name].filter(Boolean).join(' '))||'—'}</span></div>
+    <div class="field-row"><span class="k">Designation</span><span>${escapeAttr(s.designation)||'—'}</span></div>
+    <div class="field-row"><span class="k">Email</span><span class="mono">${escapeAttr(s.email)}</span></div>
+    <div class="field-row"><span class="k">Phone</span><span class="mono">${escapeAttr(s.phone)||'—'}</span></div>
+    ${s.additionalPhone ? `<div class="field-row"><span class="k">Additional phone</span><span class="mono">${escapeAttr(s.additionalPhone)}</span></div>` : ''}
+    <div class="field-row"><span class="k">Address</span><span>${escapeAttr(s.address)||'—'}</span></div>
+    <div class="field-row"><span class="k">Province</span><span>${escapeAttr(s.province)||'—'}</span></div>
+    ${s.websiteSocial ? `<div class="field-row"><span class="k">Website / social</span><span>${escapeAttr(s.websiteSocial)}</span></div>` : ''}
+  `;
+
+  document.getElementById('sd-profile-fields').innerHTML = `
+    ${s.yearsInBusiness != null ? `<div class="field-row"><span class="k">Years in business</span><span>${escapeAttr(String(s.yearsInBusiness))}</span></div>` : ''}
+    <div class="field-row"><span class="k">Services offered</span><span>${escapeAttr(s.servicesDescription)||'—'}</span></div>
+    <div class="field-row"><span class="k">Service areas</span><span>${escapeAttr(s.serviceAreas)||'—'}</span></div>
+    <div class="field-row"><span class="k">Declaration accepted</span><span>${s.declarationAccepted ? '✓ Yes' : '— No'}</span></div>
+    <div class="field-row"><span class="k">Source</span><span>${s.source==='self' ? 'Self-registered' : s.source==='imported' ? 'Bulk imported' : 'Added manually'}</span></div>
+    <div class="field-row"><span class="k">On file since</span><span class="mono">${(s.createdAt||'').slice(0,10)}</span></div>
+  `;
+
+  const docFields = [
+    ['cipcDocumentPath','CIPC registration'], ['sarsDocumentPath','SARS / tax clearance'], ['bbbeeDocumentPath','B-BBEE certificate'],
+    ['proofOfBankingDocumentPath','Proof of banking'], ['proofOfAddressDocumentPath','Proof of address'],
+    ['healthSafetyDocumentPath','Health & safety'], ['specialPermitsDocumentPath','Special permits'],
+  ];
+  const present = docFields.filter(([key])=>s[key]);
+  const docsEl = document.getElementById('sd-docs');
+  if(!present.length && !(s.otherDocuments||[]).length){
+    docsEl.innerHTML = `<span style="font-size:12px; color:var(--ink-3);">No documents on file.</span>`;
+  } else if(!can('can_review_documents')){
+    docsEl.innerHTML = `<span style="font-size:12px; color:var(--ink-3);">${present.length + (s.otherDocuments||[]).length} document(s) on file. You don't have permission to view or download them.</span>`;
+  } else {
+    docsEl.innerHTML = present.map(([key,label])=>`<div id="sd-doc-${key}" style="margin-bottom:4px; font-size:13px;">${escapeAttr(label)}: <span style="color:var(--ink-3);">loading…</span></div>`).join('')
+      + (s.otherDocuments||[]).map((d,i)=>`<div id="sd-doc-other-${i}" style="margin-bottom:4px; font-size:13px;">${escapeAttr(d.name||'Other document')}: <span style="color:var(--ink-3);">loading…</span></div>`).join('');
+    present.forEach(([key,label])=>{
+      sb.storage.from('supplier-documents').createSignedUrl(s[key], 600, {download:true}).then(({data,error})=>{
+        const el = document.getElementById(`sd-doc-${key}`);
+        if(!el) return;
+        el.innerHTML = (!error && data) ? `${escapeAttr(label)}: <a href="${data.signedUrl}" download rel="noopener">Download</a>` : `${escapeAttr(label)}: <span style="color:var(--rust);">link unavailable</span>`;
+      });
+    });
+    (s.otherDocuments||[]).forEach((d,i)=>{
+      if(!d.path){ const el=document.getElementById(`sd-doc-other-${i}`); if(el) el.innerHTML = `${escapeAttr(d.name||'Other document')}: <span style="color:var(--rust);">link unavailable</span>`; return; }
+      sb.storage.from('supplier-documents').createSignedUrl(d.path, 600, {download:true}).then(({data,error})=>{
+        const el = document.getElementById(`sd-doc-other-${i}`);
+        if(!el) return;
+        el.innerHTML = (!error && data) ? `${escapeAttr(d.name||'Other document')}: <a href="${data.signedUrl}" download rel="noopener">Download</a>` : `${escapeAttr(d.name||'Other document')}: <span style="color:var(--rust);">link unavailable</span>`;
+      });
+    });
+  }
+
+  document.getElementById('supplier-drawer').classList.add('active');
+  document.getElementById('overlay').classList.add('active');
+}
+function openAddSupplier(){
+  document.getElementById('as-name').value = '';
+  document.getElementById('as-company').value = '';
+  document.getElementById('as-email').value = '';
+  document.getElementById('as-phone').value = '';
+  document.getElementById('modal-add-supplier').classList.add('active');
+  document.getElementById('overlay').classList.add('active');
+}
+async function submitAddSupplier(){
+  const name = document.getElementById('as-name').value.trim();
+  const companyName = document.getElementById('as-company').value.trim();
+  const email = document.getElementById('as-email').value.trim();
+  const phone = document.getElementById('as-phone').value.trim();
+  if(!name || !companyName || !email){ toast("Missing details", "Name, company name, and email are all required."); return; }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ toast("Check the email address", "That doesn't look like a valid email address."); return; }
+  if(suppliers.some(s=>s.email.toLowerCase()===email.toLowerCase())){ toast("Already in the database", "A supplier with that email address is already listed."); return; }
+
+  const { data, error } = await sb.from('rfq_suppliers').insert({name, company_name:companyName, email, phone:phone||null, source:'manual'}).select().maybeSingle();
+  if(error){ console.error('add supplier failed', error); toast("Not saved", error.code==='23505' ? "A supplier with that email already exists." : "Something went wrong — check the console."); return; }
+  suppliers.push({
+    id:data.id, name:data.name, companyName:data.company_name, email:data.email, phone:data.phone||'', status:data.status, source:data.source, createdAt:data.created_at,
+    additionalPhone:'', title:'', designation:'', yearsInBusiness:null, address:'', province:'', websiteSocial:'', servicesDescription:'', serviceAreas:'',
+    declarationAccepted:false, cipcDocumentPath:null, proofOfAddressDocumentPath:null, sarsDocumentPath:null, proofOfBankingDocumentPath:null,
+    bbbeeDocumentPath:null, healthSafetyDocumentPath:null, specialPermitsDocumentPath:null, otherDocuments:[],
+  });
+  suppliers.sort((a,b)=>a.companyName.localeCompare(b.companyName));
+  closeAll();
+  renderSuppliers();
+  toast("Supplier added", `${companyName} has been added to the database.`);
+}
+async function removeSupplier(id){
+  const s = suppliers.find(x=>x.id===id);
+  if(!s) return;
+  const previous = suppliers.slice();
+  suppliers = suppliers.filter(x=>x.id!==id);
+  renderSuppliers();
+  const { error } = await sb.from('rfq_suppliers').delete().eq('id', id);
+  if(error){ console.error('remove supplier failed', error); toast("Not removed", "Something went wrong — check the console."); suppliers = previous; renderSuppliers(); return; }
+  toast("Supplier removed", `${s.companyName} has been removed from the database.`);
+}
+async function notifySuppliers(rfqId){
+  const r = rfqs.find(x=>x.id===rfqId);
+  if(!r) return;
+  const activeCount = suppliers.filter(s=>s.status==='active').length;
+  if(activeCount === 0){ toast("No suppliers to notify", "The supplier database is empty — add suppliers first."); return; }
+  toast("Sending…", `Notifying ${activeCount} supplier${activeCount===1?'':'s'} about ${r.id}.`);
+  const { data, error } = await sb.functions.invoke('notify-suppliers', { body: { rfqId, triggeredBy: (currentEmployee&&currentEmployee.email)||'system' } });
+  if(error || !data || data.error){
+    console.error('notify suppliers failed', error || data);
+    toast("Couldn't send", (data&&data.error) || "Something went wrong — check the console.");
+    return;
+  }
+  r.supplierNotifiedAt = new Date().toISOString();
+  renderRfqs();
+  toast("Suppliers notified", `${data.sent} of ${data.totalSuppliers} supplier${data.totalSuppliers===1?'':'s'} emailed about ${r.id}.`);
+}
+
 let clarAnswerId = null;
 function openClarificationAnswer(id){
   const c = clarifications.find(x=>x.id===id);
@@ -2361,6 +2521,8 @@ function closeAll(){
   document.querySelectorAll('.modal').forEach(m=>m.classList.remove('active'));
   const drawer = document.getElementById('applicant-drawer');
   if(drawer) drawer.classList.remove('active');
+  const supDrawer = document.getElementById('supplier-drawer');
+  if(supDrawer) supDrawer.classList.remove('active');
   const sb = document.getElementById('sidebar');
   if(sb) sb.classList.remove('open');
   const overlay = document.getElementById('overlay');
@@ -2396,6 +2558,7 @@ async function initAdminPage(){
       renderAudit();
       renderEmployees();
       renderClarifications();
+      renderSuppliers();
       applyPermissionUI();
       if(currentEmployee && currentEmployee.must_change_password){
         showChangePasswordGate();
@@ -2941,14 +3104,15 @@ async function pushSeedToSupabase(){
 }
 
 async function loadFromSupabase(){
-  const [rfqRes, appRes, tlRes, auditRes] = await Promise.all([
+  const [rfqRes, appRes, tlRes, auditRes, supRes] = await Promise.all([
     sb.from('rfq_rfqs').select('*').order('created_at', {ascending:true}),
     sb.from('rfq_applicants').select('*').order('created_at', {ascending:true}),
     sb.from('rfq_timeline_events').select('*').order('event_date', {ascending:true}).order('id', {ascending:true}),
     sb.from('rfq_audit_log').select('*').order('ts', {ascending:false}),
+    sb.from('rfq_suppliers').select('*').order('company_name', {ascending:true}),
   ]);
-  if(rfqRes.error||appRes.error||tlRes.error||auditRes.error){
-    console.error('load errors', rfqRes.error, appRes.error, tlRes.error, auditRes.error);
+  if(rfqRes.error||appRes.error||tlRes.error||auditRes.error||supRes.error){
+    console.error('load errors', rfqRes.error, appRes.error, tlRes.error, auditRes.error, supRes.error);
   }
 
   const timelineByApplicant = {};
@@ -2956,7 +3120,16 @@ async function loadFromSupabase(){
     (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, action:t.action, actor:t.actor, note:t.note||''});
   });
 
-  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[]}));
+  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[], supplierNotifiedAt:r.supplier_notification_sent_at||null}));
   applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
+  suppliers = (supRes.data||[]).map(s=>({
+    id:s.id, name:s.name, companyName:s.company_name, email:s.email, phone:s.phone||'', status:s.status, source:s.source, createdAt:s.created_at,
+    additionalPhone:s.additional_phone||'', title:s.title||'', designation:s.designation||'', yearsInBusiness:s.years_in_business,
+    address:s.address||'', province:s.province||'', websiteSocial:s.website_social||'', servicesDescription:s.services_description||'', serviceAreas:s.service_areas||'',
+    declarationAccepted:!!s.declaration_accepted,
+    cipcDocumentPath:s.cipc_document_path||null, proofOfAddressDocumentPath:s.proof_of_address_document_path||null, sarsDocumentPath:s.sars_document_path||null,
+    proofOfBankingDocumentPath:s.proof_of_banking_document_path||null, bbbeeDocumentPath:s.bbbee_document_path||null, healthSafetyDocumentPath:s.health_safety_document_path||null,
+    specialPermitsDocumentPath:s.special_permits_document_path||null, otherDocuments:s.other_documents||[],
+  }));
 }
