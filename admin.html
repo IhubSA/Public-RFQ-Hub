@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- RFQ Hub — version 2.38.0 (2026-08-21). See VERSION_INFO in the script for the full changelog. -->
+<!-- RFQ Hub — version 2.38.1 (2026-08-22). See VERSION_INFO in the script for the full changelog. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -389,6 +389,9 @@
       <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Western Cape" style="width:auto;"> Western Cape</label>
     </div>
     <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">Select where this tender applies. When published, suppliers registered in any of these provinces (or registered for all provinces) are emailed automatically. Leave none selected to notify every active supplier regardless of province.</div>
+    <label>Town / city (optional)</label>
+    <input type="text" id="nr-town" placeholder="e.g. Boshof, or leave blank if not site-specific">
+    <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">Shown alongside the province(s) on the public listing, for tenderers' reference only — it has no effect on which suppliers get notified.</div>
     <label>Assign approver(s)</label>
     <div id="nr-approver-list"></div>
     <select id="nr-approver-add" onchange="if(this.value) addNrApprover(this.value); this.value='';">
