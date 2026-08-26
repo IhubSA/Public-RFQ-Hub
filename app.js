@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.38.2",
-  date: "2026-08-22",
+  version: "2.38.3",
+  date: "2026-08-26",
   changelog: [
+    "2.38.3 (2026-08-26) — The public portal can now be linked directly into a specific RFQ's application form via ?apply=RFQ-ID, rather than only ever landing on the general listing and requiring the applicant to find it themselves. This runs through the exact same click path as the real \"Apply now\" button, including the required POPIA consent step — it's not a shortcut that skips it. A closed or nonexistent RFQ in the link shows a clear message instead of silently failing or opening a broken form. This exists specifically to support duplicate listings on the IhubSA Contractor Hub: since CNWE's own applicant pipeline lives only in this system, an application submitted through the Contractor Hub's own registration flow for a CNWE-originated RFQ would never actually reach CNWE staff. Redirecting Apply on the Contractor Hub side back to this link is the fix \u2014 that redirect itself needs to be built in the Contractor Hub's own frontend code, which is outside this system and not something available to edit from here. Verified directly: a genuinely open RFQ correctly triggers the real apply flow, a closed RFQ shows the right message instead of opening the form, an invalid RFQ ID fails gracefully without crashing the page, and normal listing behaviour is completely unaffected when the parameter isn't present at all.",
     "2.38.2 (2026-08-22) — Publishing an RFQ now automatically posts a duplicate listing on the IhubSA Contractor Hub too, alongside the existing supplier notification \u2014 title, description, closing date, budget, province(s), town, and required-document names, plus the actual tender documents themselves, not just a text summary. This follows the same signed-url relay pattern already proven out for the supplier document sync, just running in the other direction: the Contractor Hub pulls each document from CNWE's private storage and re-hosts it in its own public bucket, since CNWE's tender documents live in a private bucket the Contractor Hub has no access to on its own. A new CNWE Energy (Pty) Ltd company record was created there to own these listings. If a document fails to copy across, the listing still gets created \u2014 you're told directly how many of the total actually made it over, rather than the whole push silently failing or silently succeeding with gaps. Verified directly against the live systems, not just locally: pushed a real test RFQ with a real attached PDF through the full pipeline, confirmed every field landed correctly on the Contractor Hub's side (including the company link and required documents), and independently confirmed the document itself was a genuine 333KB PDF sitting in the Contractor Hub's own storage \u2014 not just a database row claiming success.",
     "2.38.1 (2026-08-22) — Added an optional Town / city field right next to the province selector in the New/Edit RFQ form. Once set, the public listing now shows the tender's location \u2014 province(s) and town together where both are set, gracefully falling back to whichever one is actually present, with nothing shown at all for older tenders that have neither. This is purely descriptive: town has no bearing on which suppliers get notified \u2014 that still runs entirely on province, exactly as before, so it stays fully compatible with expanding a search to more provinces later if a tender isn't getting enough applications. Caught and fixed a real mistake before it shipped: an early draft of the helper text used a JavaScript-style unicode escape directly in the HTML, which would have rendered as literal backslash-u-text on screen rather than a dash \u2014 the same category of bug caught once before in the SMME Procurement Plan work, this time caught by rereading the file's actual contents rather than assuming the edit was correct. Verified directly: saving an RFQ with both a province and a town persists both correctly, and the public listing correctly joins them together, shows just one when only one is set, and shows neither cleanly without a stray separator when both are absent.",
     "2.38.0 (2026-08-21) — RFQs can now be tagged with one or more provinces \u2014 a checkbox group in the New/Edit RFQ form covering all nine. This connects two pieces of backend logic that were already fully built but never wired up: the RFQ table already had a provinces column, and the supplier notification function already knew how to province-match, but nothing ever set the provinces or triggered the send automatically. Publishing an RFQ (the Draft \u2192 Open for Applications gate) now automatically emails every active supplier registered in a matching province \u2014 or registered for all provinces \u2014 the moment it goes live, with no separate button press required. The manual Notify Suppliers button still exists for re-sends. Selecting no provinces at all is treated as \"no restriction\" and reaches every active supplier, matching how it already worked before this feature existed. This only touches the publish moment \u2014 pausing, cancelling, extending, or a tender simply closing on its own don't trigger anything, exactly as intended. Verified directly: checkboxes correctly capture and restore a specific province selection across save/reload, publishing a real RFQ with provinces selected updates the database before the notification fires (not after, avoiding a race), and editing an existing RFQ's province selection persists the change correctly.",
@@ -2675,6 +2676,19 @@ async function initPublicPage(){
   }
   renderPublic();
   updatePublicTopbar();
+
+  const applyRfqId = new URLSearchParams(location.search).get('apply');
+  if(applyRfqId){
+    const target = rfqs.find(r=>r.id===applyRfqId);
+    const isClosed = target && target.close && new Date(target.close) < new Date();
+    if(!target){
+      toast("Tender not found", `${applyRfqId} could not be found — it may have closed or been removed.`);
+    } else if(isClosed){
+      toast("This tender has closed", `${target.title} is no longer accepting applications.`);
+    } else {
+      handleApplyClick(applyRfqId);
+    }
+  }
 }
 
 /* ============================================================
