@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.38.1",
+  version: "2.38.2",
   date: "2026-08-22",
   changelog: [
+    "2.38.2 (2026-08-22) — Publishing an RFQ now automatically posts a duplicate listing on the IhubSA Contractor Hub too, alongside the existing supplier notification \u2014 title, description, closing date, budget, province(s), town, and required-document names, plus the actual tender documents themselves, not just a text summary. This follows the same signed-url relay pattern already proven out for the supplier document sync, just running in the other direction: the Contractor Hub pulls each document from CNWE's private storage and re-hosts it in its own public bucket, since CNWE's tender documents live in a private bucket the Contractor Hub has no access to on its own. A new CNWE Energy (Pty) Ltd company record was created there to own these listings. If a document fails to copy across, the listing still gets created \u2014 you're told directly how many of the total actually made it over, rather than the whole push silently failing or silently succeeding with gaps. Verified directly against the live systems, not just locally: pushed a real test RFQ with a real attached PDF through the full pipeline, confirmed every field landed correctly on the Contractor Hub's side (including the company link and required documents), and independently confirmed the document itself was a genuine 333KB PDF sitting in the Contractor Hub's own storage \u2014 not just a database row claiming success.",
     "2.38.1 (2026-08-22) — Added an optional Town / city field right next to the province selector in the New/Edit RFQ form. Once set, the public listing now shows the tender's location \u2014 province(s) and town together where both are set, gracefully falling back to whichever one is actually present, with nothing shown at all for older tenders that have neither. This is purely descriptive: town has no bearing on which suppliers get notified \u2014 that still runs entirely on province, exactly as before, so it stays fully compatible with expanding a search to more provinces later if a tender isn't getting enough applications. Caught and fixed a real mistake before it shipped: an early draft of the helper text used a JavaScript-style unicode escape directly in the HTML, which would have rendered as literal backslash-u-text on screen rather than a dash \u2014 the same category of bug caught once before in the SMME Procurement Plan work, this time caught by rereading the file's actual contents rather than assuming the edit was correct. Verified directly: saving an RFQ with both a province and a town persists both correctly, and the public listing correctly joins them together, shows just one when only one is set, and shows neither cleanly without a stray separator when both are absent.",
     "2.38.0 (2026-08-21) — RFQs can now be tagged with one or more provinces \u2014 a checkbox group in the New/Edit RFQ form covering all nine. This connects two pieces of backend logic that were already fully built but never wired up: the RFQ table already had a provinces column, and the supplier notification function already knew how to province-match, but nothing ever set the provinces or triggered the send automatically. Publishing an RFQ (the Draft \u2192 Open for Applications gate) now automatically emails every active supplier registered in a matching province \u2014 or registered for all provinces \u2014 the moment it goes live, with no separate button press required. The manual Notify Suppliers button still exists for re-sends. Selecting no provinces at all is treated as \"no restriction\" and reaches every active supplier, matching how it already worked before this feature existed. This only touches the publish moment \u2014 pausing, cancelling, extending, or a tender simply closing on its own don't trigger anything, exactly as intended. Verified directly: checkboxes correctly capture and restore a specific province selection across save/reload, publishing a real RFQ with provinces selected updates the database before the notification fires (not after, avoiding a race), and editing an existing RFQ's province selection persists the change correctly.",
     "2.37.0 (2026-08-21) — The Suppliers tab now shows the full profile the underlying database has actually held since the automatic Contractor Hub sync went live \u2014 previously it only ever showed the original lean contact-list fields (name, company, email, phone), even though province, service details, and compliance documents have been flowing in for a while. Every row now shows province and a document count at a glance, with a province filter alongside the existing search. Clicking a row opens a full profile drawer \u2014 contact details, business profile, and every compliance document on file (CIPC, tax clearance, B-BBEE, banking proof, address proof, health & safety, permits) each with a working download link, gated by the same document-review permission used everywhere else documents appear in this system. Staff without that permission still see how many documents are on file, just not the links themselves. Verified directly: the table correctly shows province and document counts per supplier, the province filter populates itself from real data, the drawer shows the complete profile for a richly-populated supplier and a clean 'no documents' state for a sparse one, document links only render for staff with the right permission, and closing the drawer works the same way closing everything else in this app already does.",
@@ -1978,6 +1979,38 @@ async function notifySuppliers(rfqId){
     toast("Suppliers notified", `${data.sent} of ${data.totalSuppliers} supplier${data.totalSuppliers===1?'':'s'} emailed about ${r.id}.`);
   }
 }
+async function pushRfqToContractorHub(rfqId){
+  const r = rfqs.find(x=>x.id===rfqId);
+  if(!r) return;
+  try{
+    const resp = await fetch('https://zilumoopwnrtrtnsmjhr.supabase.co/functions/v1/receive-rfq-from-cnwe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-secret': 'cnwe-ihubsa-rfq-sync-4e8b2f96a1c73d5e0f8a6b2c9d4e7f10' },
+      body: JSON.stringify({
+        cnweRfqId: r.id, title: r.title, description: r.desc, deadline: r.close, budget: r.budget,
+        provinces: r.provinces || [], town: r.town || null, requiredDocs: r.requiredDocs || [],
+        attachments: r.attachments || [], contractorHubRfqId: r.contractorHubRfqId || null,
+      }),
+    });
+    const data = await resp.json();
+    if(!resp.ok || data.error){
+      console.error('push to contractor hub failed', data);
+      toast("Couldn't post to Contractor Hub", data.error || "Something went wrong — check the console.");
+      return;
+    }
+    r.contractorHubRfqId = data.contractorHubRfqId;
+    const { error } = await sb.from('rfq_rfqs').update({ contractor_hub_rfq_id: data.contractorHubRfqId }).eq('id', r.id);
+    if(error) console.error('failed to save contractor_hub_rfq_id', error);
+    if(data.attachmentsTotal > 0 && data.attachmentsMigrated < data.attachmentsTotal){
+      toast("Posted to Contractor Hub (documents incomplete)", `${r.id} is listed there, but only ${data.attachmentsMigrated} of ${data.attachmentsTotal} document(s) copied across successfully.`);
+    } else {
+      toast("Posted to Contractor Hub", `${r.id} is now also listed on the Contractor Hub${data.attachmentsTotal ? ` with ${data.attachmentsTotal} document(s)` : ''}.`);
+    }
+  } catch(e){
+    console.error('push to contractor hub failed', e);
+    toast("Couldn't post to Contractor Hub", "Something went wrong — check the console.");
+  }
+}
 
 let clarAnswerId = null;
 function openClarificationAnswer(id){
@@ -2044,6 +2077,7 @@ async function submitApproval(isApprove){
       }
       toast("RFQ published", `${r.title} is now visible on the public portal. Notifying matching suppliers…`);
       notifySuppliers(r.id);
+      pushRfqToContractorHub(r.id);
       return;
     }
     closeAll();
@@ -3151,7 +3185,7 @@ async function loadFromSupabase(){
     (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, action:t.action, actor:t.actor, note:t.note||''});
   });
 
-  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[], supplierNotifiedAt:r.supplier_notification_sent_at||null, provinces:r.provinces||[], town:r.town||''}));
+  rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[], supplierNotifiedAt:r.supplier_notification_sent_at||null, provinces:r.provinces||[], town:r.town||'', contractorHubRfqId:r.contractor_hub_rfq_id||null}));
   applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
   suppliers = (supRes.data||[]).map(s=>({
