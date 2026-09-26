@@ -220,7 +220,7 @@ let rfqs = [];
 let applicants = [];
 let suppliers = [];
 
-function docReq(name, mandatory){ return {id:uid("DOC"), name, mandatory:mandatory!==false}; }
+function docReq(name, mandatory){ return {id:uniqueId("DOC"), name, mandatory:mandatory!==false}; }
 
 function seed(){
   rfqs = [
@@ -1053,8 +1053,15 @@ async function createRfq(){
     return;
   }
 
-  uidCounter++;
-  const id = "RFQ-2026-"+uidCounter;
+  // Was: a sequential counter reseeded per browser tab by scanning whatever
+  // RFQs happened to be loaded locally (bumpUidCounterPastExisting). If that
+  // scan ever missed a row — a stale tab, or an RFQ that was temporarily
+  // missing — two sessions could generate the same ID, and the follow-up
+  // edit/publish calls (plain UPDATE by id) would silently overwrite
+  // whichever RFQ already held it. uniqueId() (timestamp + randomness, no
+  // shared state) is what the public portal already uses to avoid exactly
+  // this, so the admin console now uses the same generator.
+  const id = uniqueId("RFQ-2026");
   const r = {id, title, category:document.getElementById('nr-category').value||"General",
     budget:Number(document.getElementById('nr-budget').value)||0, status:"Draft",
     open:document.getElementById('nr-open').value||today(), close:fromDatetimeLocalValue(document.getElementById('nr-close').value) || defaultCloseDateTime(21),
