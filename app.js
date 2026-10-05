@@ -2481,6 +2481,60 @@ function openApply(rfqId){
   document.getElementById('modal-apply').classList.add('active');
   document.getElementById('overlay').classList.add('active');
 }
+
+/* ---- Image compression for mobile uploads ---- */
+function isImageFile(file){
+  if(file.type && file.type.startsWith('image/')) return true;
+  const ext = (file.name||'').split('.').pop().toLowerCase();
+  return ['jpg','jpeg','png','heic','heif','webp','bmp','tiff','tif'].includes(ext);
+}
+async function compressImage(file, maxDim, quality){
+  maxDim = maxDim || 1600;
+  quality = quality || 0.80;
+  return new Promise((resolve)=>{
+    // If the file is HEIC/HEIF, the browser may not decode it via Image —
+    // in that case we fall back to the original file (still uploads fine).
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = ()=>{
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if(w <= maxDim && h <= maxDim && file.size < 500000){
+        // Already small enough — skip compression
+        resolve(file); return;
+      }
+      if(w > maxDim || h > maxDim){
+        const ratio = Math.min(maxDim / w, maxDim / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob)=>{
+        if(!blob || blob.size >= file.size){
+          // Compression didn't help — use original
+          resolve(file); return;
+        }
+        const ext = file.name.replace(/\.[^.]+$/, '');
+        const compressed = new File([blob], ext + '.jpg', { type:'image/jpeg' });
+        resolve(compressed);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = ()=>{
+      URL.revokeObjectURL(url);
+      resolve(file); // Can't decode (e.g. HEIC on Android) — upload original
+    };
+    img.src = url;
+  });
+}
+async function prepareFile(file){
+  if(!isImageFile(file)) return file;
+  try{ return await compressImage(file); }
+  catch(e){ return file; } // Never block upload if compression fails
+}
+
 function renderApplyDocList(){
   const el = document.getElementById('apply-doclist');
   if(!applyDocState.length){ el.innerHTML = `<div style="font-size:12px; color:var(--ink-3);">No documents were specified for this RFQ.</div>`; return; }
@@ -2497,13 +2551,14 @@ function renderApplyDocList(){
     </div>`).join('');
 }
 async function handleDocFile(i, input){
-  const file = input.files && input.files[0];
-  if(!file) return;
-  applyDocState[i].fileName = file.name;
+  const rawFile = input.files && input.files[0];
+  if(!rawFile) return;
+  applyDocState[i].fileName = rawFile.name;
   applyDocState[i].filePath = null;
   applyDocState[i].uploading = true;
   renderApplyDocList();
 
+  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `${applyingTo}/${Date.now()}_${safeName}`;
   try{
@@ -2776,13 +2831,14 @@ function removeProposalDoc(i){
   renderProposalDocList();
 }
 async function handleProposalFile(input){
-  const file = input.files && input.files[0];
-  if(!file) return;
+  const rawFile = input.files && input.files[0];
+  if(!rawFile) return;
   input.value = '';
   const idx = proposalDocState.length;
-  proposalDocState.push({fileName:file.name, filePath:null, uploading:true});
+  proposalDocState.push({fileName:rawFile.name, filePath:null, uploading:true});
   renderProposalDocList();
 
+  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `proposals/${proposalToken}/${Date.now()}_${safeName}`;
   try{
@@ -2899,13 +2955,14 @@ function removeInfoResponseDoc(i){
   renderInfoResponseDocList();
 }
 async function handleInfoResponseFile(input){
-  const file = input.files && input.files[0];
-  if(!file) return;
+  const rawFile = input.files && input.files[0];
+  if(!rawFile) return;
   input.value = '';
   const idx = infoResponseDocState.length;
-  infoResponseDocState.push({fileName:file.name, filePath:null, uploading:true});
+  infoResponseDocState.push({fileName:rawFile.name, filePath:null, uploading:true});
   renderInfoResponseDocList();
 
+  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `info-responses/${infoResponseToken}/${Date.now()}_${safeName}`;
   try{
