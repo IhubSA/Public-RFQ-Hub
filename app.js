@@ -2492,8 +2492,8 @@ function renderApplyDocList(){
         : d.filePath
           ? `<span class="fname">✓ ${d.fileName}</span>`
           : d.fileName
-            ? `<span class="fname" style="color:var(--rust);">Upload failed — retry</span><label class="upload-btn">Choose file<input type="file" onchange="handleDocFile(${i}, this)"></label>`
-            : `<label class="upload-btn">Choose file<input type="file" onchange="handleDocFile(${i}, this)"></label>`}
+            ? `<span class="fname" style="color:var(--rust);">Upload failed — retry</span><label class="upload-btn">Choose file<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleDocFile(${i}, this)"></label>`
+            : `<label class="upload-btn">Choose file<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleDocFile(${i}, this)"></label>`}
     </div>`).join('');
 }
 async function handleDocFile(i, input){
@@ -2750,7 +2750,7 @@ async function initProposalSubmitView(token){
       <input type="number" id="ps-price" min="0" step="0.01" placeholder="e.g. 125000.00">
       <label style="margin-top:12px;">Proposal documents</label>
       <div id="ps-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" onchange="handleProposalFile(this)"></label>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleProposalFile(this)"></label>
       <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Add your priced quotation, scope of works, and any other supporting documents — use "Add another document" as many times as you need.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitProposalForm()">Submit Proposal</button>
     `;
@@ -2873,7 +2873,7 @@ async function initInfoResponseView(token){
       <textarea id="ir-pub-response" placeholder="Type your response here" style="min-height:110px;"></textarea>
       <label style="margin-top:12px;">Supporting documents (optional)</label>
       <div id="ir-pub-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" onchange="handleInfoResponseFile(this)"></label>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleInfoResponseFile(this)"></label>
       <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Attach any documents that support your response, if relevant — this is optional.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitInfoResponseForm()">Submit Response</button>
     `;
