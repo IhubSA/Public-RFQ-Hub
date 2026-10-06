@@ -3435,12 +3435,12 @@ async function generateCnweReport(){
 
     /* ---- RFQ Status Chart ---- */
     if(sections.statusChart){
-      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:380px; margin:0 auto;"><canvas id="cnwe-chart-status"></canvas></div></div>`;
+      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:380px; height:300px; margin:0 auto;"><canvas id="cnwe-chart-status" width="380" height="300"></canvas></div></div>`;
     }
 
     /* ---- Applications per RFQ ---- */
     if(sections.appsChart){
-      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px;"><canvas id="cnwe-chart-apps"></canvas></div></div>`;
+      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px; height:280px;"><canvas id="cnwe-chart-apps" width="700" height="280"></canvas></div></div>`;
     }
 
     /* ---- Supplier Overview ---- */
@@ -3455,7 +3455,7 @@ async function generateCnweReport(){
             <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">New in Period</td><td style="padding:6px 0; text-align:right; font-weight:700; color:${accentColor};">${newS}</td></tr>
             <tr><td style="padding:6px 0;">Avg. Applications per RFQ</td><td style="padding:6px 0; text-align:right; font-weight:700;">${avgApps}</td></tr>
           </table>
-          <div style="max-width:300px;"><canvas id="cnwe-chart-provinces"></canvas></div>
+          <div style="max-width:300px; height:300px;"><canvas id="cnwe-chart-provinces" width="300" height="300"></canvas></div>
         </div>
       </div>`;
     }
@@ -3471,7 +3471,7 @@ async function generateCnweReport(){
             <thead><tr style="border-bottom:2px solid ${brandColor};"><th style="text-align:left; padding:6px 0;">Status</th><th style="text-align:right; padding:6px 0;">Count</th></tr></thead><tbody>`;
       ssLabels.forEach(s=>{ html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0; text-transform:capitalize;">${s}</td><td style="padding:6px 0; text-align:right; font-weight:700;">${appStatusCounts[s]}</td></tr>`; });
       if(ssLabels.length===0) html += `<tr><td colspan="2" style="padding:12px; text-align:center; color:#999;">No applications in the selected period.</td></tr>`;
-      html += `</tbody></table><div style="max-width:300px;"><canvas id="cnwe-chart-app-status"></canvas></div></div></div>`;
+      html += `</tbody></table><div style="max-width:300px; height:300px;"><canvas id="cnwe-chart-app-status" width="300" height="300"></canvas></div></div></div>`;
     }
 
     /* ---- Clarifications ---- */
@@ -3499,33 +3499,35 @@ async function generateCnweReport(){
 
     /* ---- Render charts ---- */
     if(typeof Chart !== 'undefined'){
+      setTimeout(() => {
       const chartColors = ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'];
 
       if(sections.statusChart){
         const ctx = document.getElementById('cnwe-chart-status');
-        if(ctx) new Chart(ctx, { type:'doughnut', data:{ labels:['Open','Closed','Draft'], datasets:[{ data:[openR,closedR,draftR], backgroundColor:['#4caf50','#f44336','#999'] }] }, options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{font:{size:11}} } } } });
+        if(ctx) new Chart(ctx, { type:'doughnut', data:{ labels:['Open','Closed','Draft'], datasets:[{ data:[openR,closedR,draftR], backgroundColor:['#4caf50','#f44336','#999'] }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{font:{size:11}} } } } });
       }
 
       if(sections.appsChart && periodRfqs.length>0){
         const labels = periodRfqs.map(r=>(r.title||'').substring(0,30));
         const data = periodRfqs.map(r=> applicants.filter(a=>a.rfq===r.id).length);
         const ctx = document.getElementById('cnwe-chart-apps');
-        if(ctx) new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ label:'Applications', data, backgroundColor:accentColor }] }, options:{ responsive:true, indexAxis:'y', plugins:{ legend:{display:false} }, scales:{ x:{ beginAtZero:true, ticks:{stepSize:1} } } } });
+        if(ctx) new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ label:'Applications', data, backgroundColor:accentColor }] }, options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{ legend:{display:false} }, scales:{ x:{ beginAtZero:true, ticks:{stepSize:1} } } } });
       }
 
       if(sections.suppliers){
         const pLabels = Object.keys(provCounts);
         const pData = Object.values(provCounts);
         const ctx = document.getElementById('cnwe-chart-provinces');
-        if(ctx && pLabels.length>0) new Chart(ctx, { type:'doughnut', data:{ labels:pLabels, datasets:[{ data:pData, backgroundColor:chartColors }] }, options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} }, title:{ display:true, text:'Suppliers by Province', font:{size:13} } } } });
+        if(ctx && pLabels.length>0) new Chart(ctx, { type:'doughnut', data:{ labels:pLabels, datasets:[{ data:pData, backgroundColor:chartColors }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} }, title:{ display:true, text:'Suppliers by Province', font:{size:13} } } } });
       }
 
       if(sections.submissions){
         const ssL = Object.keys(appStatusCounts);
         const ssD = Object.values(appStatusCounts);
         const ctx = document.getElementById('cnwe-chart-app-status');
-        if(ctx && ssL.length>0) new Chart(ctx, { type:'pie', data:{ labels:ssL, datasets:[{ data:ssD, backgroundColor:chartColors }] }, options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} } } } });
+        if(ctx && ssL.length>0) new Chart(ctx, { type:'pie', data:{ labels:ssL, datasets:[{ data:ssD, backgroundColor:chartColors }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} } } } });
       }
+      }, 100);
     }
 
     document.getElementById('cnwe-report-pdf-btn').style.display='inline-block';
