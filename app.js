@@ -3431,8 +3431,8 @@ async function generateCnweReport(){
 
     /* ---- Build HTML ---- */
     let html = `
-    <div id="cnwe-report-printable" style="background:#fff; color:#222; font-family:'IBM Plex Sans', Arial, sans-serif; padding:40px; border-radius:8px; border:1px solid #ddd;">
-      <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid ${accentColor}; padding-bottom:16px; margin-bottom:30px; flex-wrap:wrap; gap:12px;">
+    <div id="cnwe-report-printable" style="background:#fff; color:#222; font-family:'IBM Plex Sans', Arial, sans-serif; padding:30px; border-radius:8px; border:1px solid #ddd;">
+      <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid ${accentColor}; padding-bottom:16px; margin-bottom:22px; flex-wrap:wrap; gap:12px;">
         <div style="display:flex; align-items:center; gap:14px;">
           ${logoUrl ? `<img src="${logoUrl}" alt="Logo" style="height:50px; width:auto; max-width:160px; object-fit:contain;" crossorigin="anonymous">` : ''}
           <div>
@@ -3449,7 +3449,7 @@ async function generateCnweReport(){
     /* ---- Executive Summary ---- */
     if(sections.summary){
       html += `
-      <div style="margin-bottom:30px;">
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Executive Summary</h2>
         <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:14px;">
           <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${brandColor};"><div style="font-size:28px; font-weight:700; color:${brandColor};">${totalR}</div><div style="font-size:12px; color:#888; margin-top:4px;">RFQs Published</div></div>
@@ -3465,7 +3465,7 @@ async function generateCnweReport(){
     /* ---- RFQ Register ---- */
     if(sections.rfqs){
       html += `
-      <div style="margin-bottom:30px;">
+      <div style="margin-bottom:22px;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Register</h2>
         <div style="overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px;">
@@ -3497,8 +3497,8 @@ async function generateCnweReport(){
 
     /* ---- RFQ Status Chart ---- */
     if(sections.statusChart){
-      const statusSvg = _svgPieDonut([openR,closedR,draftR], ['Open','Closed','Draft'], ['#4caf50','#f44336','#999'], 260, true);
-      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:380px; margin:0 auto;">${statusSvg}</div></div>`;
+      const statusSvg = _svgPieDonut([openR,closedR,draftR], ['Open','Closed','Draft'], ['#4caf50','#f44336','#999'], 220, true);
+      html += `<div style="margin-bottom:22px; page-break-inside:avoid;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:320px; margin:0 auto;">${statusSvg}</div></div>`;
     }
 
     /* ---- Applications per RFQ ---- */
@@ -3506,14 +3506,14 @@ async function generateCnweReport(){
       const appLabels = periodRfqs.map(r=>(r.title||'—').substring(0,30));
       const appData = periodRfqs.map(r=> applicants.filter(a=>a.rfq===r.id).length);
       const appsSvg = _svgBarH(appData, appLabels, accentColor, 650);
-      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px;">${appsSvg}</div></div>`;
+      html += `<div style="margin-bottom:22px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px;">${appsSvg}</div></div>`;
     }
 
     /* ---- Supplier Overview ---- */
     if(sections.suppliers){
-      const provSvg = _svgPieDonut(Object.values(provCounts), Object.keys(provCounts), ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 240, true, 'Suppliers by Province');
+      const provSvg = _svgPieDonut(Object.values(provCounts), Object.keys(provCounts), ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 200, true, 'Suppliers by Province');
       html += `
-      <div style="margin-bottom:30px;">
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Supplier Overview</h2>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;">
           <table style="width:100%; border-collapse:collapse; font-size:13px;">
@@ -3522,7 +3522,7 @@ async function generateCnweReport(){
             <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">New in Period</td><td style="padding:6px 0; text-align:right; font-weight:700; color:${accentColor};">${newS}</td></tr>
             <tr><td style="padding:6px 0;">Avg. Applications per RFQ</td><td style="padding:6px 0; text-align:right; font-weight:700;">${avgApps}</td></tr>
           </table>
-          <div style="max-width:300px;">${provSvg}</div>
+          <div style="max-width:260px;">${provSvg}</div>
         </div>
       </div>`;
     }
@@ -3530,22 +3530,22 @@ async function generateCnweReport(){
     /* ---- Submission Status ---- */
     if(sections.submissions){
       const ssLabels = Object.keys(appStatusCounts);
-      const ssSvg = _svgPieDonut(Object.values(appStatusCounts), ssLabels, ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 240, false);
+      const ssSvg = _svgPieDonut(Object.values(appStatusCounts), ssLabels, ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 200, false);
       html += `
-      <div style="margin-bottom:30px;">
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Application Status Breakdown</h2>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;">
           <table style="width:100%; border-collapse:collapse; font-size:13px;">
             <thead><tr style="border-bottom:2px solid ${brandColor};"><th style="text-align:left; padding:6px 0;">Status</th><th style="text-align:right; padding:6px 0;">Count</th></tr></thead><tbody>`;
       ssLabels.forEach(s=>{ html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0; text-transform:capitalize;">${s}</td><td style="padding:6px 0; text-align:right; font-weight:700;">${appStatusCounts[s]}</td></tr>`; });
       if(ssLabels.length===0) html += `<tr><td colspan="2" style="padding:12px; text-align:center; color:#999;">No applications in the selected period.</td></tr>`;
-      html += `</tbody></table><div style="max-width:300px;">${ssSvg}</div></div></div>`;
+      html += `</tbody></table><div style="max-width:260px;">${ssSvg}</div></div></div>`;
     }
 
     /* ---- Clarifications ---- */
     if(sections.clarifications){
       html += `
-      <div style="margin-bottom:30px;">
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Clarifications</h2>
         <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:14px;">
           <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${brandColor};"><div style="font-size:28px; font-weight:700; color:${brandColor};">${totalClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Total</div></div>
