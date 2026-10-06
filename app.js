@@ -9,10 +9,9 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.39.0",
-  date: "2026-10-06",
+  version: "2.38.4",
+  date: "2026-08-27",
   changelog: [
-    "2.39.0 (2026-10-06) — Staff can now issue an addendum or clarification without waiting for a bidder to ask a question: Communications → Clarifications → \"+ Issue addendum\". It publishes straight to that RFQ's public listing under a separate \"Addenda & notices\" heading, and can optionally email every applicant already on the RFQ (excluding unsuccessful ones). Also fixes the RFQ-ID collision that overwrote live RFQs: new RFQ and required-document IDs now use the time+random generator instead of the per-tab counter.",
     "2.38.4 (2026-08-27) — The applicant case drawer was a fixed 460px wide regardless of screen size, which felt genuinely cramped on a real desktop monitor when reviewing several documents and comment fields at once. It's now 680px (still capping at 92% of the screen width on anything narrower, so it doesn't break on a smaller laptop or tablet), with the base text size and line spacing throughout nudged up too \u2014 document names, contact fields, and comment boxes all have real room to breathe instead of wrapping awkwardly. This is a pure layout change; nothing about how the drawer loads or displays data was touched. Verified by actually rendering it with realistic case data (documents, evaluation, assignment) rather than just eyeballing the CSS numbers \u2014 confirmed the wider layout looks clean and correctly proportioned before shipping.",
     "2.38.3 (2026-08-26) — The public portal can now be linked directly into a specific RFQ's application form via ?apply=RFQ-ID, rather than only ever landing on the general listing and requiring the applicant to find it themselves. This runs through the exact same click path as the real \"Apply now\" button, including the required POPIA consent step — it's not a shortcut that skips it. A closed or nonexistent RFQ in the link shows a clear message instead of silently failing or opening a broken form. This exists specifically to support duplicate listings on the IhubSA Contractor Hub: since CNWE's own applicant pipeline lives only in this system, an application submitted through the Contractor Hub's own registration flow for a CNWE-originated RFQ would never actually reach CNWE staff. Redirecting Apply on the Contractor Hub side back to this link is the fix \u2014 that redirect itself needs to be built in the Contractor Hub's own frontend code, which is outside this system and not something available to edit from here. Verified directly: a genuinely open RFQ correctly triggers the real apply flow, a closed RFQ shows the right message instead of opening the form, an invalid RFQ ID fails gracefully without crashing the page, and normal listing behaviour is completely unaffected when the parameter isn't present at all.",
     "2.38.2 (2026-08-22) — Publishing an RFQ now automatically posts a duplicate listing on the IhubSA Contractor Hub too, alongside the existing supplier notification \u2014 title, description, closing date, budget, province(s), town, and required-document names, plus the actual tender documents themselves, not just a text summary. This follows the same signed-url relay pattern already proven out for the supplier document sync, just running in the other direction: the Contractor Hub pulls each document from CNWE's private storage and re-hosts it in its own public bucket, since CNWE's tender documents live in a private bucket the Contractor Hub has no access to on its own. A new CNWE Energy (Pty) Ltd company record was created there to own these listings. If a document fails to copy across, the listing still gets created \u2014 you're told directly how many of the total actually made it over, rather than the whole push silently failing or silently succeeding with gaps. Verified directly against the live systems, not just locally: pushed a real test RFQ with a real attached PDF through the full pipeline, confirmed every field landed correctly on the Contractor Hub's side (including the company link and required documents), and independently confirmed the document itself was a genuine 333KB PDF sitting in the Contractor Hub's own storage \u2014 not just a database row claiming success.",
@@ -334,6 +333,7 @@ function switchView(name){
   if(name==='employees') renderEmployees();
   if(name==='clarifications') renderClarifications();
   if(name==='suppliers') renderSuppliers();
+  if(name==='reports') initCnweReportTab();
 }
 document.querySelectorAll('#tabs .tab').forEach(t=>t.addEventListener('click',()=>switchView(t.dataset.view)));
 
@@ -1804,48 +1804,9 @@ function triggerClarificationEmail(trigger, payload){
     if(error || (data && data.error)) console.error('clarification email trigger failed', trigger, error || (data && data.error));
   }).catch(e=>console.error('clarification email trigger failed', trigger, e));
 }
-function openIssueAddendum(){
-  if(!can('can_manage_rfqs')){ toast("Not allowed", "You need the Manage RFQs permission to issue an addendum."); return; }
-  const sel = document.getElementById('add-rfq');
-  const cur = (document.getElementById('clar-filter-rfq')||{}).value;
-  sel.innerHTML = rfqs.map(r=>`<option value="${escapeAttr(r.id)}">${escapeAttr(r.id)} — ${escapeAttr(r.title)}</option>`).join('');
-  if(cur && rfqs.some(r=>r.id===cur)) sel.value = cur;
-  document.getElementById('add-title').value = '';
-  document.getElementById('add-text').value = '';
-  document.getElementById('add-notify').checked = true;
-  document.getElementById('modal-issue-addendum').classList.add('active');
-  document.getElementById('overlay').classList.add('active');
-}
-async function submitIssueAddendum(){
-  const rfqId = document.getElementById('add-rfq').value;
-  const title = document.getElementById('add-title').value.trim();
-  const text = document.getElementById('add-text').value.trim();
-  const notify = document.getElementById('add-notify').checked;
-  if(!rfqId){ toast("Choose an RFQ", "Pick the RFQ this addendum applies to."); return; }
-  if(!title || !text){ toast("Title and details required", "Please fill in both before publishing."); return; }
-  const email = (currentEmployee&&currentEmployee.email)||'Unknown';
-
-  const { error } = await sb.from('rfq_clarifications').insert({
-    rfq_id: rfqId, question: title, answer: text,
-    asked_by_name: 'CNWE Procurement', asked_by_email: email,
-    status: 'answered', visibility: 'public', kind: 'addendum',
-    answered_by: email, answered_at: new Date().toISOString(),
-  });
-  if(error){ console.error('addendum persist failed', error); toast("Not saved", "Could not publish this addendum — check the console."); return; }
-
-  const recipients = notify ? applicants.filter(a=>a.rfq===rfqId && a.status!=='Unsuccessful') : [];
-  logAudit(`Addendum issued on ${rfqId} — published for all bidders${notify?`, emailed to ${recipients.length} applicant(s)`:''}`, email, `${title}: ${text}`.slice(0,200));
-  closeAll();
-  toast("Addendum published", notify ? `Live on the public listing, and ${recipients.length} applicant(s) are being emailed.` : "Live on the public listing.");
-  renderClarifications();
-  recipients.forEach(a=>triggerEmail('rfq_addendum', a.id, { question:title, answer:text }));
-}
-
 async function renderClarifications(){
   const filterSel = document.getElementById('clar-filter-rfq');
   if(!filterSel) return;
-  const addBtn = document.getElementById('btn-issue-addendum');
-  if(addBtn) addBtn.style.display = can('can_manage_rfqs') ? '' : 'none';
   const curFilter = filterSel.value || 'all';
   filterSel.innerHTML = `<option value="all">All RFQs</option>` + rfqs.map(r=>`<option value="${r.id}">${r.id} — ${r.title}</option>`).join('');
   if(rfqs.some(r=>r.id===curFilter)) filterSel.value = curFilter;
@@ -1861,7 +1822,7 @@ async function renderClarifications(){
     <tr><th>RFQ</th><th>Question</th><th>From</th><th>Status</th><th></th></tr>
     ${list.map((c,i)=>`<tr>
       <td class="ref mono">${escapeAttr(c.rfq_id)}</td>
-      <td style="max-width:320px;">${c.kind==='addendum' ? `<span class="badge gold" style="margin-right:6px;">Addendum</span>` : ''}${escapeAttr(c.question)}</td>
+      <td style="max-width:320px;">${escapeAttr(c.question)}</td>
       <td>${escapeAttr(c.asked_by_name)}${c.asked_by_business? ' · '+escapeAttr(c.asked_by_business):''}</td>
       <td>${c.status==='answered'
           ? `<span class="badge ${c.visibility==='public'?'sage':'ink'}">${c.visibility==='public'?'Published':'Answered privately'}</span>`
@@ -2373,7 +2334,7 @@ async function renderPublic(){
     f._signedUrl = error ? null : data.signedUrl;
   })));
   // Published Q&A — visible to everyone, no login, per RFQ.
-  const { data: clarData } = await sb.from('rfq_clarifications').select('rfq_id, question, answer, kind, answered_at').eq('status','answered').eq('visibility','public');
+  const { data: clarData } = await sb.from('rfq_clarifications').select('rfq_id, question, answer').eq('status','answered').eq('visibility','public');
   const clarByRfq = {};
   (clarData||[]).forEach(c=>{ (clarByRfq[c.rfq_id] = clarByRfq[c.rfq_id]||[]).push(c); });
 
@@ -2401,19 +2362,10 @@ async function renderPublic(){
         <ul class="doclist-public" style="margin-bottom:14px;">
           ${r.attachments.map(f=>f._signedUrl ? `<li><span class="dot"></span><a href="${f._signedUrl}" target="_blank" rel="noopener" download>${escapeAttr(f.name)}</a></li>` : '').join('')}
         </ul>` : ''}
-      ${(clarByRfq[r.id]||[]).filter(c=>c.kind==='addendum').length ? `
-        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin-bottom:5px;">Addenda &amp; notices</div>
-        <div style="margin-bottom:14px;">
-          ${clarByRfq[r.id].filter(c=>c.kind==='addendum').sort((a,b)=>new Date(b.answered_at||0)-new Date(a.answered_at||0)).map(c=>`
-            <div style="background:var(--paper-2); border-left:3px solid var(--gold, #C9A24B); border-radius:var(--radius); padding:8px 10px; margin-bottom:6px;">
-              <div style="font-weight:600; font-size:12.5px;">${escapeAttr(c.question)}${c.answered_at ? ` <span style="font-weight:400; color:var(--ink-3);">· ${new Date(c.answered_at).toLocaleDateString('en-ZA',{day:'numeric',month:'long',year:'numeric'})}</span>` : ''}</div>
-              <div style="font-size:12.5px; margin-top:3px; white-space:pre-line;">${escapeAttr(c.answer)}</div>
-            </div>`).join('')}
-        </div>` : ''}
-      ${(clarByRfq[r.id]||[]).filter(c=>c.kind!=='addendum').length ? `
+      ${(clarByRfq[r.id]&&clarByRfq[r.id].length) ? `
         <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin-bottom:5px;">Published questions &amp; answers</div>
         <div style="margin-bottom:14px;">
-          ${clarByRfq[r.id].filter(c=>c.kind!=='addendum').map(c=>`
+          ${clarByRfq[r.id].map(c=>`
             <div style="background:var(--paper-2); border-radius:var(--radius); padding:8px 10px; margin-bottom:6px;">
               <div style="font-weight:600; font-size:12.5px;">Q: ${escapeAttr(c.question)}</div>
               <div style="font-size:12.5px; margin-top:3px;">A: ${escapeAttr(c.answer)}</div>
@@ -2530,6 +2482,60 @@ function openApply(rfqId){
   document.getElementById('modal-apply').classList.add('active');
   document.getElementById('overlay').classList.add('active');
 }
+
+/* ---- Image compression for mobile uploads ---- */
+function isImageFile(file){
+  if(file.type && file.type.startsWith('image/')) return true;
+  const ext = (file.name||'').split('.').pop().toLowerCase();
+  return ['jpg','jpeg','png','heic','heif','webp','bmp','tiff','tif'].includes(ext);
+}
+async function compressImage(file, maxDim, quality){
+  maxDim = maxDim || 1600;
+  quality = quality || 0.80;
+  return new Promise((resolve)=>{
+    // If the file is HEIC/HEIF, the browser may not decode it via Image —
+    // in that case we fall back to the original file (still uploads fine).
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = ()=>{
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if(w <= maxDim && h <= maxDim && file.size < 500000){
+        // Already small enough — skip compression
+        resolve(file); return;
+      }
+      if(w > maxDim || h > maxDim){
+        const ratio = Math.min(maxDim / w, maxDim / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob)=>{
+        if(!blob || blob.size >= file.size){
+          // Compression didn't help — use original
+          resolve(file); return;
+        }
+        const ext = file.name.replace(/\.[^.]+$/, '');
+        const compressed = new File([blob], ext + '.jpg', { type:'image/jpeg' });
+        resolve(compressed);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = ()=>{
+      URL.revokeObjectURL(url);
+      resolve(file); // Can't decode (e.g. HEIC on Android) — upload original
+    };
+    img.src = url;
+  });
+}
+async function prepareFile(file){
+  if(!isImageFile(file)) return file;
+  try{ return await compressImage(file); }
+  catch(e){ return file; } // Never block upload if compression fails
+}
+
 function renderApplyDocList(){
   const el = document.getElementById('apply-doclist');
   if(!applyDocState.length){ el.innerHTML = `<div style="font-size:12px; color:var(--ink-3);">No documents were specified for this RFQ.</div>`; return; }
@@ -2541,18 +2547,19 @@ function renderApplyDocList(){
         : d.filePath
           ? `<span class="fname">✓ ${d.fileName}</span>`
           : d.fileName
-            ? `<span class="fname" style="color:var(--rust);">Upload failed — retry</span><label class="upload-btn">Choose file<input type="file" onchange="handleDocFile(${i}, this)"></label>`
-            : `<label class="upload-btn">Choose file<input type="file" onchange="handleDocFile(${i}, this)"></label>`}
+            ? `<span class="fname" style="color:var(--rust);">Upload failed — retry</span><label class="upload-btn">Choose file<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleDocFile(${i}, this)"></label>`
+            : `<label class="upload-btn">Choose file<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleDocFile(${i}, this)"></label>`}
     </div>`).join('');
 }
 async function handleDocFile(i, input){
-  const file = input.files && input.files[0];
-  if(!file) return;
-  applyDocState[i].fileName = file.name;
+  const rawFile = input.files && input.files[0];
+  if(!rawFile) return;
+  applyDocState[i].fileName = rawFile.name;
   applyDocState[i].filePath = null;
   applyDocState[i].uploading = true;
   renderApplyDocList();
 
+  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `${applyingTo}/${Date.now()}_${safeName}`;
   try{
@@ -2799,7 +2806,7 @@ async function initProposalSubmitView(token){
       <input type="number" id="ps-price" min="0" step="0.01" placeholder="e.g. 125000.00">
       <label style="margin-top:12px;">Proposal documents</label>
       <div id="ps-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" onchange="handleProposalFile(this)"></label>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleProposalFile(this)"></label>
       <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Add your priced quotation, scope of works, and any other supporting documents — use "Add another document" as many times as you need.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitProposalForm()">Submit Proposal</button>
     `;
@@ -2825,13 +2832,14 @@ function removeProposalDoc(i){
   renderProposalDocList();
 }
 async function handleProposalFile(input){
-  const file = input.files && input.files[0];
-  if(!file) return;
+  const rawFile = input.files && input.files[0];
+  if(!rawFile) return;
   input.value = '';
   const idx = proposalDocState.length;
-  proposalDocState.push({fileName:file.name, filePath:null, uploading:true});
+  proposalDocState.push({fileName:rawFile.name, filePath:null, uploading:true});
   renderProposalDocList();
 
+  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `proposals/${proposalToken}/${Date.now()}_${safeName}`;
   try{
@@ -2922,7 +2930,7 @@ async function initInfoResponseView(token){
       <textarea id="ir-pub-response" placeholder="Type your response here" style="min-height:110px;"></textarea>
       <label style="margin-top:12px;">Supporting documents (optional)</label>
       <div id="ir-pub-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" onchange="handleInfoResponseFile(this)"></label>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleInfoResponseFile(this)"></label>
       <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Attach any documents that support your response, if relevant — this is optional.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitInfoResponseForm()">Submit Response</button>
     `;
@@ -2948,13 +2956,14 @@ function removeInfoResponseDoc(i){
   renderInfoResponseDocList();
 }
 async function handleInfoResponseFile(input){
-  const file = input.files && input.files[0];
-  if(!file) return;
+  const rawFile = input.files && input.files[0];
+  if(!rawFile) return;
   input.value = '';
   const idx = infoResponseDocState.length;
-  infoResponseDocState.push({fileName:file.name, filePath:null, uploading:true});
+  infoResponseDocState.push({fileName:rawFile.name, filePath:null, uploading:true});
   renderInfoResponseDocList();
 
+  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `info-responses/${infoResponseToken}/${Date.now()}_${safeName}`;
   try{
@@ -3268,4 +3277,314 @@ async function loadFromSupabase(){
     proofOfBankingDocumentPath:s.proof_of_banking_document_path||null, bbbeeDocumentPath:s.bbbee_document_path||null, healthSafetyDocumentPath:s.health_safety_document_path||null,
     specialPermitsDocumentPath:s.special_permits_document_path||null, otherDocuments:s.other_documents||[],
   }));
+}
+
+/* ============================================================
+   REPORTS
+   ============================================================ */
+
+function initCnweReportTab(){
+  const f = document.getElementById('cnwe-report-date-from');
+  if(f && !f.value) setCnweReportRange('month');
+}
+
+function setCnweReportRange(preset){
+  const fromEl = document.getElementById('cnwe-report-date-from');
+  const toEl   = document.getElementById('cnwe-report-date-to');
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  toEl.value = fmt(now);
+  if(preset==='week'){ const d=new Date(now); d.setDate(d.getDate()-d.getDay()); fromEl.value=fmt(d); }
+  else if(preset==='month') fromEl.value=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`;
+  else if(preset==='quarter'){ const qm=Math.floor(now.getMonth()/3)*3; fromEl.value=`${now.getFullYear()}-${pad(qm+1)}-01`; }
+  else if(preset==='year') fromEl.value=`${now.getFullYear()}-01-01`;
+}
+
+async function generateCnweReport(){
+  const fromDate = document.getElementById('cnwe-report-date-from').value;
+  const toDate   = document.getElementById('cnwe-report-date-to').value;
+  if(!fromDate||!toDate){ toast("Missing dates","Please select a date range."); return; }
+  if(fromDate>toDate){ toast("Invalid range","The 'From' date must be before the 'To' date."); return; }
+
+  const sections = {
+    summary:       document.getElementById('cnwe-rpt-summary').checked,
+    rfqs:          document.getElementById('cnwe-rpt-rfqs').checked,
+    statusChart:   document.getElementById('cnwe-rpt-status-chart').checked,
+    appsChart:     document.getElementById('cnwe-rpt-apps-chart').checked,
+    suppliers:     document.getElementById('cnwe-rpt-suppliers').checked,
+    submissions:   document.getElementById('cnwe-rpt-submissions').checked,
+    clarifications:document.getElementById('cnwe-rpt-clarifications').checked
+  };
+
+  toast("Generating…","Building your report.");
+  const outputEl = document.getElementById('cnwe-report-output');
+  outputEl.innerHTML = '<div style="text-align:center; padding:40px; color:var(--ink-3);">Loading data…</div>';
+
+  try{
+    /* ---- Use already-loaded global arrays ---- */
+    const from = new Date(fromDate+'T00:00:00');
+    const to   = new Date(toDate+'T23:59:59');
+    const inRange = d => { if(!d) return false; const dt=new Date(d); return dt>=from && dt<=to; };
+
+    const periodRfqs    = rfqs.filter(r=> inRange(r.open));
+    const periodApps    = applicants.filter(a=> inRange(a.received));
+    const periodSupps   = suppliers.filter(s=> inRange(s.createdAt));
+
+    // Clarifications
+    let periodClars = [];
+    try{
+      const { data } = await sb.from('rfq_clarifications').select('id, rfq_id, status, created_at').gte('created_at', fromDate).lte('created_at', toDate+'T23:59:59');
+      periodClars = data || [];
+    } catch(e){ /* clarifications table may not exist */ }
+
+    /* ---- Stats ---- */
+    const totalR   = periodRfqs.length;
+    const openR    = periodRfqs.filter(r=> r.status==='open' || (r.close && new Date(r.close)>new Date())).length;
+    const closedR  = periodRfqs.filter(r=> r.status==='closed' || (r.close && new Date(r.close)<=new Date() && r.status!=='draft')).length;
+    const draftR   = periodRfqs.filter(r=> r.status==='draft').length;
+    const totalApps= periodApps.length;
+    const totalS   = suppliers.length;
+    const newS     = periodSupps.length;
+    const activeS  = suppliers.filter(s=>s.status!=='removed').length;
+    const avgApps  = totalR>0 ? (applicants.filter(a=> periodRfqs.some(r=>r.id===a.rfq)).length / totalR).toFixed(1) : '0';
+    const totalClars    = periodClars.length;
+    const answeredClars = periodClars.filter(c=>c.status==='answered').length;
+
+    // Province breakdown
+    const provCounts={};
+    suppliers.forEach(s=>{ const p=s.province||'Unknown'; provCounts[p]=(provCounts[p]||0)+1; });
+
+    // Applicant status breakdown
+    const appStatusCounts={};
+    periodApps.forEach(a=>{ const st=a.status||'received'; appStatusCounts[st]=(appStatusCounts[st]||0)+1; });
+
+    /* ---- Branding ---- */
+    const logoEl = document.querySelector('.brand .logo-plate img');
+    const logoUrl = logoEl ? logoEl.src : '';
+    const orgName = 'CNWE Energy';
+    const brandColor = '#0E1826';
+    const accentColor = '#C9A84C';
+    const fmtDate = d => { if(!d) return '—'; return new Date(d).toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'}); };
+
+    /* ---- Build HTML ---- */
+    let html = `
+    <div id="cnwe-report-printable" style="background:#fff; color:#222; font-family:'IBM Plex Sans', Arial, sans-serif; padding:40px; border-radius:8px; border:1px solid #ddd;">
+      <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid ${accentColor}; padding-bottom:16px; margin-bottom:30px; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; align-items:center; gap:14px;">
+          ${logoUrl ? `<img src="${logoUrl}" alt="Logo" style="height:50px; width:auto; max-width:160px; object-fit:contain;" crossorigin="anonymous">` : ''}
+          <div>
+            <h1 style="margin:0; font-size:22px; color:${brandColor};">${orgName}</h1>
+            <p style="margin:2px 0 0; font-size:13px; color:#888;">Procurement Report</p>
+          </div>
+        </div>
+        <div style="text-align:right; font-size:13px; color:#666;">
+          <div><strong>Period:</strong> ${fmtDate(fromDate)} — ${fmtDate(toDate)}</div>
+          <div><strong>Generated:</strong> ${fmtDate(new Date())}</div>
+        </div>
+      </div>`;
+
+    /* ---- Executive Summary ---- */
+    if(sections.summary){
+      html += `
+      <div style="margin-bottom:30px;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Executive Summary</h2>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:14px;">
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${brandColor};"><div style="font-size:28px; font-weight:700; color:${brandColor};">${totalR}</div><div style="font-size:12px; color:#888; margin-top:4px;">RFQs Published</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #4caf50;"><div style="font-size:28px; font-weight:700; color:#4caf50;">${openR}</div><div style="font-size:12px; color:#888; margin-top:4px;">Open RFQs</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #f44336;"><div style="font-size:28px; font-weight:700; color:#f44336;">${closedR}</div><div style="font-size:12px; color:#888; margin-top:4px;">Closed RFQs</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${accentColor};"><div style="font-size:28px; font-weight:700; color:${accentColor};">${totalApps}</div><div style="font-size:12px; color:#888; margin-top:4px;">Applications</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #9c27b0;"><div style="font-size:28px; font-weight:700; color:#9c27b0;">${totalS}</div><div style="font-size:12px; color:#888; margin-top:4px;">Total Suppliers</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #009688;"><div style="font-size:28px; font-weight:700; color:#009688;">${newS}</div><div style="font-size:12px; color:#888; margin-top:4px;">New Registrations</div></div>
+        </div>
+      </div>`;
+    }
+
+    /* ---- RFQ Register ---- */
+    if(sections.rfqs){
+      html += `
+      <div style="margin-bottom:30px;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Register</h2>
+        <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          <thead><tr style="background:${brandColor}; color:#fff;">
+            <th style="padding:8px 10px; text-align:left;">RFQ Title</th>
+            <th style="padding:8px 10px; text-align:left;">Category</th>
+            <th style="padding:8px 10px; text-align:left;">Open Date</th>
+            <th style="padding:8px 10px; text-align:left;">Close Date</th>
+            <th style="padding:8px 10px; text-align:center;">Status</th>
+            <th style="padding:8px 10px; text-align:center;">Applications</th>
+          </tr></thead><tbody>`;
+      if(periodRfqs.length===0) html += `<tr><td colspan="6" style="padding:12px; text-align:center; color:#999;">No RFQs in the selected period.</td></tr>`;
+      periodRfqs.forEach((r,i)=>{
+        const appCount = applicants.filter(a=>a.rfq===r.id).length;
+        let status = r.status || 'draft';
+        let statusColor = status==='open'?'#4caf50':status==='closed'?'#f44336':'#999';
+        if(r.close && new Date(r.close)<=new Date() && status!=='draft'){ status='closed'; statusColor='#f44336'; }
+        html += `<tr style="background:${i%2===0?'#fff':'#f9f9f9'}; border-bottom:1px solid #eee;">
+          <td style="padding:8px 10px;">${r.title||'—'}</td>
+          <td style="padding:8px 10px;">${r.category||'—'}</td>
+          <td style="padding:8px 10px;">${fmtDate(r.open)}</td>
+          <td style="padding:8px 10px;">${fmtDate(r.close)}</td>
+          <td style="padding:8px 10px; text-align:center;"><span style="background:${statusColor}; color:#fff; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; text-transform:capitalize;">${status}</span></td>
+          <td style="padding:8px 10px; text-align:center; font-weight:600;">${appCount}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div></div>`;
+    }
+
+    /* ---- RFQ Status Chart ---- */
+    if(sections.statusChart){
+      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:380px; margin:0 auto;"><canvas id="cnwe-chart-status"></canvas></div></div>`;
+    }
+
+    /* ---- Applications per RFQ ---- */
+    if(sections.appsChart){
+      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px;"><canvas id="cnwe-chart-apps"></canvas></div></div>`;
+    }
+
+    /* ---- Supplier Overview ---- */
+    if(sections.suppliers){
+      html += `
+      <div style="margin-bottom:30px;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Supplier Overview</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;">
+          <table style="width:100%; border-collapse:collapse; font-size:13px;">
+            <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">Total Registered Suppliers</td><td style="padding:6px 0; text-align:right; font-weight:700;">${totalS}</td></tr>
+            <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">Active</td><td style="padding:6px 0; text-align:right; font-weight:700; color:#4caf50;">${activeS}</td></tr>
+            <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">New in Period</td><td style="padding:6px 0; text-align:right; font-weight:700; color:${accentColor};">${newS}</td></tr>
+            <tr><td style="padding:6px 0;">Avg. Applications per RFQ</td><td style="padding:6px 0; text-align:right; font-weight:700;">${avgApps}</td></tr>
+          </table>
+          <div style="max-width:300px;"><canvas id="cnwe-chart-provinces"></canvas></div>
+        </div>
+      </div>`;
+    }
+
+    /* ---- Submission Status ---- */
+    if(sections.submissions){
+      const ssLabels = Object.keys(appStatusCounts);
+      html += `
+      <div style="margin-bottom:30px;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Application Status Breakdown</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;">
+          <table style="width:100%; border-collapse:collapse; font-size:13px;">
+            <thead><tr style="border-bottom:2px solid ${brandColor};"><th style="text-align:left; padding:6px 0;">Status</th><th style="text-align:right; padding:6px 0;">Count</th></tr></thead><tbody>`;
+      ssLabels.forEach(s=>{ html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0; text-transform:capitalize;">${s}</td><td style="padding:6px 0; text-align:right; font-weight:700;">${appStatusCounts[s]}</td></tr>`; });
+      if(ssLabels.length===0) html += `<tr><td colspan="2" style="padding:12px; text-align:center; color:#999;">No applications in the selected period.</td></tr>`;
+      html += `</tbody></table><div style="max-width:300px;"><canvas id="cnwe-chart-app-status"></canvas></div></div></div>`;
+    }
+
+    /* ---- Clarifications ---- */
+    if(sections.clarifications){
+      html += `
+      <div style="margin-bottom:30px;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Clarifications</h2>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:14px;">
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${brandColor};"><div style="font-size:28px; font-weight:700; color:${brandColor};">${totalClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Total</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #4caf50;"><div style="font-size:28px; font-weight:700; color:#4caf50;">${answeredClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Answered</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${accentColor};"><div style="font-size:28px; font-weight:700; color:${accentColor};">${totalClars-answeredClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Pending</div></div>
+        </div>
+      </div>`;
+    }
+
+    /* ---- Footer ---- */
+    html += `
+      <div style="border-top:2px solid ${accentColor}; padding-top:12px; margin-top:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="font-size:11px; color:#aaa;">Confidential — ${orgName}</div>
+        <div style="font-size:11px; color:#aaa;">Powered by iHubSA RFQ Hub</div>
+      </div>
+    </div>`;
+
+    outputEl.innerHTML = html;
+
+    /* ---- Render charts ---- */
+    if(typeof Chart !== 'undefined'){
+      const chartColors = ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'];
+
+      if(sections.statusChart){
+        const ctx = document.getElementById('cnwe-chart-status');
+        if(ctx) new Chart(ctx, { type:'doughnut', data:{ labels:['Open','Closed','Draft'], datasets:[{ data:[openR,closedR,draftR], backgroundColor:['#4caf50','#f44336','#999'] }] }, options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{font:{size:11}} } } } });
+      }
+
+      if(sections.appsChart && periodRfqs.length>0){
+        const labels = periodRfqs.map(r=>(r.title||'').substring(0,30));
+        const data = periodRfqs.map(r=> applicants.filter(a=>a.rfq===r.id).length);
+        const ctx = document.getElementById('cnwe-chart-apps');
+        if(ctx) new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ label:'Applications', data, backgroundColor:accentColor }] }, options:{ responsive:true, indexAxis:'y', plugins:{ legend:{display:false} }, scales:{ x:{ beginAtZero:true, ticks:{stepSize:1} } } } });
+      }
+
+      if(sections.suppliers){
+        const pLabels = Object.keys(provCounts);
+        const pData = Object.values(provCounts);
+        const ctx = document.getElementById('cnwe-chart-provinces');
+        if(ctx && pLabels.length>0) new Chart(ctx, { type:'doughnut', data:{ labels:pLabels, datasets:[{ data:pData, backgroundColor:chartColors }] }, options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} }, title:{ display:true, text:'Suppliers by Province', font:{size:13} } } } });
+      }
+
+      if(sections.submissions){
+        const ssL = Object.keys(appStatusCounts);
+        const ssD = Object.values(appStatusCounts);
+        const ctx = document.getElementById('cnwe-chart-app-status');
+        if(ctx && ssL.length>0) new Chart(ctx, { type:'pie', data:{ labels:ssL, datasets:[{ data:ssD, backgroundColor:chartColors }] }, options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} } } } });
+      }
+    }
+
+    document.getElementById('cnwe-report-pdf-btn').style.display='inline-block';
+    document.getElementById('cnwe-report-word-btn').style.display='inline-block';
+    toast("Report ready","Your report has been generated.");
+
+  } catch(err){
+    console.error('Report generation error:', err);
+    outputEl.innerHTML = '<div style="text-align:center; padding:40px; color:#F87171;">Error generating report. Please try again.</div>';
+    toast("Error","Could not generate report.");
+  }
+}
+
+/* ── PDF download ── */
+function downloadCnweReportPDF(){
+  const el = document.getElementById('cnwe-report-printable');
+  if(!el){ toast("No report","Generate the report first."); return; }
+  const fromDate = document.getElementById('cnwe-report-date-from').value;
+  const toDate   = document.getElementById('cnwe-report-date-to').value;
+  const filename = `CNWE_Energy_Report_${fromDate}_to_${toDate}.pdf`;
+  if(typeof html2pdf==='undefined'){ toast("Missing library","PDF library not loaded."); return; }
+  toast("Preparing…","Building your PDF.");
+  html2pdf().set({
+    margin:[10,10,10,10], filename, image:{type:'jpeg',quality:0.95},
+    html2canvas:{scale:2,useCORS:true,logging:false},
+    jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
+    pagebreak:{mode:['avoid-all','css','legacy']}
+  }).from(el).save().then(()=>toast("Downloaded","PDF saved."));
+}
+
+/* ── Word download ── */
+function downloadCnweReportWord(){
+  const el = document.getElementById('cnwe-report-printable');
+  if(!el){ toast("No report","Generate the report first."); return; }
+  const fromDate = document.getElementById('cnwe-report-date-from').value;
+  const toDate   = document.getElementById('cnwe-report-date-to').value;
+  const filename = `CNWE_Energy_Report_${fromDate}_to_${toDate}.doc`;
+
+  const clone = el.cloneNode(true);
+  const canvases = el.querySelectorAll('canvas');
+  const cloneCanvases = clone.querySelectorAll('canvas');
+  canvases.forEach((c,i)=>{
+    try{
+      const img=document.createElement('img');
+      img.src=c.toDataURL('image/png');
+      img.style.cssText=c.style.cssText||'';
+      img.style.maxWidth='100%';
+      if(cloneCanvases[i]&&cloneCanvases[i].parentNode) cloneCanvases[i].parentNode.replaceChild(img,cloneCanvases[i]);
+    }catch(e){}
+  });
+
+  const htmlContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+    <head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#222;}table{border-collapse:collapse;width:100%;}td,th{padding:4pt 6pt;border:1px solid #ddd;}img{max-width:100%;}</style></head>
+    <body>${clone.innerHTML}</body></html>`;
+
+  const blob = new Blob(['﻿', htmlContent], {type:'application/msword'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast("Downloaded","Word document saved.");
 }
