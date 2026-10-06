@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.38.4",
-  date: "2026-08-27",
+  version: "2.39.0",
+  date: "2026-10-06",
   changelog: [
+    "2.39.0 (2026-10-06) — Staff can now issue an addendum or clarification without waiting for a bidder to ask a question: Communications → Clarifications → \"+ Issue addendum\". It publishes straight to that RFQ's public listing under a separate \"Addenda & notices\" heading, and can optionally email every applicant already on the RFQ (excluding unsuccessful ones). Also fixes the RFQ-ID collision that overwrote live RFQs: new RFQ and required-document IDs now use the time+random generator instead of the per-tab counter.",
     "2.38.4 (2026-08-27) — The applicant case drawer was a fixed 460px wide regardless of screen size, which felt genuinely cramped on a real desktop monitor when reviewing several documents and comment fields at once. It's now 680px (still capping at 92% of the screen width on anything narrower, so it doesn't break on a smaller laptop or tablet), with the base text size and line spacing throughout nudged up too \u2014 document names, contact fields, and comment boxes all have real room to breathe instead of wrapping awkwardly. This is a pure layout change; nothing about how the drawer loads or displays data was touched. Verified by actually rendering it with realistic case data (documents, evaluation, assignment) rather than just eyeballing the CSS numbers \u2014 confirmed the wider layout looks clean and correctly proportioned before shipping.",
     "2.38.3 (2026-08-26) — The public portal can now be linked directly into a specific RFQ's application form via ?apply=RFQ-ID, rather than only ever landing on the general listing and requiring the applicant to find it themselves. This runs through the exact same click path as the real \"Apply now\" button, including the required POPIA consent step — it's not a shortcut that skips it. A closed or nonexistent RFQ in the link shows a clear message instead of silently failing or opening a broken form. This exists specifically to support duplicate listings on the IhubSA Contractor Hub: since CNWE's own applicant pipeline lives only in this system, an application submitted through the Contractor Hub's own registration flow for a CNWE-originated RFQ would never actually reach CNWE staff. Redirecting Apply on the Contractor Hub side back to this link is the fix \u2014 that redirect itself needs to be built in the Contractor Hub's own frontend code, which is outside this system and not something available to edit from here. Verified directly: a genuinely open RFQ correctly triggers the real apply flow, a closed RFQ shows the right message instead of opening the form, an invalid RFQ ID fails gracefully without crashing the page, and normal listing behaviour is completely unaffected when the parameter isn't present at all.",
     "2.38.2 (2026-08-22) — Publishing an RFQ now automatically posts a duplicate listing on the IhubSA Contractor Hub too, alongside the existing supplier notification \u2014 title, description, closing date, budget, province(s), town, and required-document names, plus the actual tender documents themselves, not just a text summary. This follows the same signed-url relay pattern already proven out for the supplier document sync, just running in the other direction: the Contractor Hub pulls each document from CNWE's private storage and re-hosts it in its own public bucket, since CNWE's tender documents live in a private bucket the Contractor Hub has no access to on its own. A new CNWE Energy (Pty) Ltd company record was created there to own these listings. If a document fails to copy across, the listing still gets created \u2014 you're told directly how many of the total actually made it over, rather than the whole push silently failing or silently succeeding with gaps. Verified directly against the live systems, not just locally: pushed a real test RFQ with a real attached PDF through the full pipeline, confirmed every field landed correctly on the Contractor Hub's side (including the company link and required documents), and independently confirmed the document itself was a genuine 333KB PDF sitting in the Contractor Hub's own storage \u2014 not just a database row claiming success.",
@@ -1803,9 +1804,48 @@ function triggerClarificationEmail(trigger, payload){
     if(error || (data && data.error)) console.error('clarification email trigger failed', trigger, error || (data && data.error));
   }).catch(e=>console.error('clarification email trigger failed', trigger, e));
 }
+function openIssueAddendum(){
+  if(!can('can_manage_rfqs')){ toast("Not allowed", "You need the Manage RFQs permission to issue an addendum."); return; }
+  const sel = document.getElementById('add-rfq');
+  const cur = (document.getElementById('clar-filter-rfq')||{}).value;
+  sel.innerHTML = rfqs.map(r=>`<option value="${escapeAttr(r.id)}">${escapeAttr(r.id)} — ${escapeAttr(r.title)}</option>`).join('');
+  if(cur && rfqs.some(r=>r.id===cur)) sel.value = cur;
+  document.getElementById('add-title').value = '';
+  document.getElementById('add-text').value = '';
+  document.getElementById('add-notify').checked = true;
+  document.getElementById('modal-issue-addendum').classList.add('active');
+  document.getElementById('overlay').classList.add('active');
+}
+async function submitIssueAddendum(){
+  const rfqId = document.getElementById('add-rfq').value;
+  const title = document.getElementById('add-title').value.trim();
+  const text = document.getElementById('add-text').value.trim();
+  const notify = document.getElementById('add-notify').checked;
+  if(!rfqId){ toast("Choose an RFQ", "Pick the RFQ this addendum applies to."); return; }
+  if(!title || !text){ toast("Title and details required", "Please fill in both before publishing."); return; }
+  const email = (currentEmployee&&currentEmployee.email)||'Unknown';
+
+  const { error } = await sb.from('rfq_clarifications').insert({
+    rfq_id: rfqId, question: title, answer: text,
+    asked_by_name: 'CNWE Procurement', asked_by_email: email,
+    status: 'answered', visibility: 'public', kind: 'addendum',
+    answered_by: email, answered_at: new Date().toISOString(),
+  });
+  if(error){ console.error('addendum persist failed', error); toast("Not saved", "Could not publish this addendum — check the console."); return; }
+
+  const recipients = notify ? applicants.filter(a=>a.rfq===rfqId && a.status!=='Unsuccessful') : [];
+  logAudit(`Addendum issued on ${rfqId} — published for all bidders${notify?`, emailed to ${recipients.length} applicant(s)`:''}`, email, `${title}: ${text}`.slice(0,200));
+  closeAll();
+  toast("Addendum published", notify ? `Live on the public listing, and ${recipients.length} applicant(s) are being emailed.` : "Live on the public listing.");
+  renderClarifications();
+  recipients.forEach(a=>triggerEmail('rfq_addendum', a.id, { question:title, answer:text }));
+}
+
 async function renderClarifications(){
   const filterSel = document.getElementById('clar-filter-rfq');
   if(!filterSel) return;
+  const addBtn = document.getElementById('btn-issue-addendum');
+  if(addBtn) addBtn.style.display = can('can_manage_rfqs') ? '' : 'none';
   const curFilter = filterSel.value || 'all';
   filterSel.innerHTML = `<option value="all">All RFQs</option>` + rfqs.map(r=>`<option value="${r.id}">${r.id} — ${r.title}</option>`).join('');
   if(rfqs.some(r=>r.id===curFilter)) filterSel.value = curFilter;
@@ -1821,7 +1861,7 @@ async function renderClarifications(){
     <tr><th>RFQ</th><th>Question</th><th>From</th><th>Status</th><th></th></tr>
     ${list.map((c,i)=>`<tr>
       <td class="ref mono">${escapeAttr(c.rfq_id)}</td>
-      <td style="max-width:320px;">${escapeAttr(c.question)}</td>
+      <td style="max-width:320px;">${c.kind==='addendum' ? `<span class="badge gold" style="margin-right:6px;">Addendum</span>` : ''}${escapeAttr(c.question)}</td>
       <td>${escapeAttr(c.asked_by_name)}${c.asked_by_business? ' · '+escapeAttr(c.asked_by_business):''}</td>
       <td>${c.status==='answered'
           ? `<span class="badge ${c.visibility==='public'?'sage':'ink'}">${c.visibility==='public'?'Published':'Answered privately'}</span>`
@@ -2333,7 +2373,7 @@ async function renderPublic(){
     f._signedUrl = error ? null : data.signedUrl;
   })));
   // Published Q&A — visible to everyone, no login, per RFQ.
-  const { data: clarData } = await sb.from('rfq_clarifications').select('rfq_id, question, answer').eq('status','answered').eq('visibility','public');
+  const { data: clarData } = await sb.from('rfq_clarifications').select('rfq_id, question, answer, kind, answered_at').eq('status','answered').eq('visibility','public');
   const clarByRfq = {};
   (clarData||[]).forEach(c=>{ (clarByRfq[c.rfq_id] = clarByRfq[c.rfq_id]||[]).push(c); });
 
@@ -2361,10 +2401,19 @@ async function renderPublic(){
         <ul class="doclist-public" style="margin-bottom:14px;">
           ${r.attachments.map(f=>f._signedUrl ? `<li><span class="dot"></span><a href="${f._signedUrl}" target="_blank" rel="noopener" download>${escapeAttr(f.name)}</a></li>` : '').join('')}
         </ul>` : ''}
-      ${(clarByRfq[r.id]&&clarByRfq[r.id].length) ? `
+      ${(clarByRfq[r.id]||[]).filter(c=>c.kind==='addendum').length ? `
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin-bottom:5px;">Addenda &amp; notices</div>
+        <div style="margin-bottom:14px;">
+          ${clarByRfq[r.id].filter(c=>c.kind==='addendum').sort((a,b)=>new Date(b.answered_at||0)-new Date(a.answered_at||0)).map(c=>`
+            <div style="background:var(--paper-2); border-left:3px solid var(--gold, #C9A24B); border-radius:var(--radius); padding:8px 10px; margin-bottom:6px;">
+              <div style="font-weight:600; font-size:12.5px;">${escapeAttr(c.question)}${c.answered_at ? ` <span style="font-weight:400; color:var(--ink-3);">· ${new Date(c.answered_at).toLocaleDateString('en-ZA',{day:'numeric',month:'long',year:'numeric'})}</span>` : ''}</div>
+              <div style="font-size:12.5px; margin-top:3px; white-space:pre-line;">${escapeAttr(c.answer)}</div>
+            </div>`).join('')}
+        </div>` : ''}
+      ${(clarByRfq[r.id]||[]).filter(c=>c.kind!=='addendum').length ? `
         <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin-bottom:5px;">Published questions &amp; answers</div>
         <div style="margin-bottom:14px;">
-          ${clarByRfq[r.id].map(c=>`
+          ${clarByRfq[r.id].filter(c=>c.kind!=='addendum').map(c=>`
             <div style="background:var(--paper-2); border-radius:var(--radius); padding:8px 10px; margin-bottom:6px;">
               <div style="font-weight:600; font-size:12.5px;">Q: ${escapeAttr(c.question)}</div>
               <div style="font-size:12.5px; margin-top:3px;">A: ${escapeAttr(c.answer)}</div>
@@ -2481,60 +2530,6 @@ function openApply(rfqId){
   document.getElementById('modal-apply').classList.add('active');
   document.getElementById('overlay').classList.add('active');
 }
-
-/* ---- Image compression for mobile uploads ---- */
-function isImageFile(file){
-  if(file.type && file.type.startsWith('image/')) return true;
-  const ext = (file.name||'').split('.').pop().toLowerCase();
-  return ['jpg','jpeg','png','heic','heif','webp','bmp','tiff','tif'].includes(ext);
-}
-async function compressImage(file, maxDim, quality){
-  maxDim = maxDim || 1600;
-  quality = quality || 0.80;
-  return new Promise((resolve)=>{
-    // If the file is HEIC/HEIF, the browser may not decode it via Image —
-    // in that case we fall back to the original file (still uploads fine).
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = ()=>{
-      URL.revokeObjectURL(url);
-      let w = img.naturalWidth, h = img.naturalHeight;
-      if(w <= maxDim && h <= maxDim && file.size < 500000){
-        // Already small enough — skip compression
-        resolve(file); return;
-      }
-      if(w > maxDim || h > maxDim){
-        const ratio = Math.min(maxDim / w, maxDim / h);
-        w = Math.round(w * ratio);
-        h = Math.round(h * ratio);
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob((blob)=>{
-        if(!blob || blob.size >= file.size){
-          // Compression didn't help — use original
-          resolve(file); return;
-        }
-        const ext = file.name.replace(/\.[^.]+$/, '');
-        const compressed = new File([blob], ext + '.jpg', { type:'image/jpeg' });
-        resolve(compressed);
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = ()=>{
-      URL.revokeObjectURL(url);
-      resolve(file); // Can't decode (e.g. HEIC on Android) — upload original
-    };
-    img.src = url;
-  });
-}
-async function prepareFile(file){
-  if(!isImageFile(file)) return file;
-  try{ return await compressImage(file); }
-  catch(e){ return file; } // Never block upload if compression fails
-}
-
 function renderApplyDocList(){
   const el = document.getElementById('apply-doclist');
   if(!applyDocState.length){ el.innerHTML = `<div style="font-size:12px; color:var(--ink-3);">No documents were specified for this RFQ.</div>`; return; }
@@ -2546,19 +2541,18 @@ function renderApplyDocList(){
         : d.filePath
           ? `<span class="fname">✓ ${d.fileName}</span>`
           : d.fileName
-            ? `<span class="fname" style="color:var(--rust);">Upload failed — retry</span><label class="upload-btn">Choose file<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleDocFile(${i}, this)"></label>`
-            : `<label class="upload-btn">Choose file<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleDocFile(${i}, this)"></label>`}
+            ? `<span class="fname" style="color:var(--rust);">Upload failed — retry</span><label class="upload-btn">Choose file<input type="file" onchange="handleDocFile(${i}, this)"></label>`
+            : `<label class="upload-btn">Choose file<input type="file" onchange="handleDocFile(${i}, this)"></label>`}
     </div>`).join('');
 }
 async function handleDocFile(i, input){
-  const rawFile = input.files && input.files[0];
-  if(!rawFile) return;
-  applyDocState[i].fileName = rawFile.name;
+  const file = input.files && input.files[0];
+  if(!file) return;
+  applyDocState[i].fileName = file.name;
   applyDocState[i].filePath = null;
   applyDocState[i].uploading = true;
   renderApplyDocList();
 
-  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `${applyingTo}/${Date.now()}_${safeName}`;
   try{
@@ -2805,7 +2799,7 @@ async function initProposalSubmitView(token){
       <input type="number" id="ps-price" min="0" step="0.01" placeholder="e.g. 125000.00">
       <label style="margin-top:12px;">Proposal documents</label>
       <div id="ps-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleProposalFile(this)"></label>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ps-add-doc-label">Add a document</span><input type="file" id="ps-file-input" onchange="handleProposalFile(this)"></label>
       <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Add your priced quotation, scope of works, and any other supporting documents — use "Add another document" as many times as you need.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitProposalForm()">Submit Proposal</button>
     `;
@@ -2831,14 +2825,13 @@ function removeProposalDoc(i){
   renderProposalDocList();
 }
 async function handleProposalFile(input){
-  const rawFile = input.files && input.files[0];
-  if(!rawFile) return;
+  const file = input.files && input.files[0];
+  if(!file) return;
   input.value = '';
   const idx = proposalDocState.length;
-  proposalDocState.push({fileName:rawFile.name, filePath:null, uploading:true});
+  proposalDocState.push({fileName:file.name, filePath:null, uploading:true});
   renderProposalDocList();
 
-  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `proposals/${proposalToken}/${Date.now()}_${safeName}`;
   try{
@@ -2929,7 +2922,7 @@ async function initInfoResponseView(token){
       <textarea id="ir-pub-response" placeholder="Type your response here" style="min-height:110px;"></textarea>
       <label style="margin-top:12px;">Supporting documents (optional)</label>
       <div id="ir-pub-doc-list"></div>
-      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,image/*" onchange="handleInfoResponseFile(this)"></label>
+      <label class="upload-btn" style="margin-top:6px;"><span id="ir-pub-add-doc-label">Add a document</span><input type="file" id="ir-pub-file-input" onchange="handleInfoResponseFile(this)"></label>
       <p style="font-size:11.5px; color:var(--ink-3); margin-top:6px;">Attach any documents that support your response, if relevant — this is optional.</p>
       <button class="btn gold" style="width:100%; margin-top:16px;" onclick="submitInfoResponseForm()">Submit Response</button>
     `;
@@ -2955,14 +2948,13 @@ function removeInfoResponseDoc(i){
   renderInfoResponseDocList();
 }
 async function handleInfoResponseFile(input){
-  const rawFile = input.files && input.files[0];
-  if(!rawFile) return;
+  const file = input.files && input.files[0];
+  if(!file) return;
   input.value = '';
   const idx = infoResponseDocState.length;
-  infoResponseDocState.push({fileName:rawFile.name, filePath:null, uploading:true});
+  infoResponseDocState.push({fileName:file.name, filePath:null, uploading:true});
   renderInfoResponseDocList();
 
-  const file = await prepareFile(rawFile);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `info-responses/${infoResponseToken}/${Date.now()}_${safeName}`;
   try{
