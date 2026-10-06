@@ -3283,6 +3283,68 @@ async function loadFromSupabase(){
    REPORTS
    ============================================================ */
 
+/* ── SVG Chart Helpers (no external library needed) ── */
+function _svgPieDonut(data, labels, colors, size, donut, title) {
+  const total = data.reduce((a, b) => a + b, 0);
+  if (total === 0) return '<div style="text-align:center;color:#999;padding:20px;">No data</div>';
+  const cx = size / 2, cy = size / 2, r = size / 2 - 10;
+  const innerR = donut ? r * 0.55 : 0;
+  let angle = -Math.PI / 2, paths = '';
+  const nonZero = data.filter(v => v > 0).length;
+  data.forEach((val, i) => {
+    if (val === 0) return;
+    const col = colors[i % colors.length];
+    if (nonZero === 1) {
+      if (donut) {
+        paths += `<path d="M${cx} ${cy - r}A${r} ${r} 0 1 1 ${cx} ${cy + r}A${r} ${r} 0 1 1 ${cx} ${cy - r}Z M${cx} ${cy - innerR}A${innerR} ${innerR} 0 1 0 ${cx} ${cy + innerR}A${innerR} ${innerR} 0 1 0 ${cx} ${cy - innerR}Z" fill="${col}" fill-rule="evenodd"/>`;
+      } else {
+        paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${col}"/>`;
+      }
+      angle += (val / total) * 2 * Math.PI;
+      return;
+    }
+    const sweep = (val / total) * 2 * Math.PI;
+    const end = angle + sweep;
+    const lg = sweep > Math.PI ? 1 : 0;
+    const x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
+    const x2 = cx + r * Math.cos(end),   y2 = cy + r * Math.sin(end);
+    if (donut) {
+      const ix1 = cx + innerR * Math.cos(angle), iy1 = cy + innerR * Math.sin(angle);
+      const ix2 = cx + innerR * Math.cos(end),   iy2 = cy + innerR * Math.sin(end);
+      paths += `<path d="M${x1} ${y1}A${r} ${r} 0 ${lg} 1 ${x2} ${y2}L${ix2} ${iy2}A${innerR} ${innerR} 0 ${lg} 0 ${ix1} ${iy1}Z" fill="${col}"/>`;
+    } else {
+      paths += `<path d="M${cx} ${cy}L${x1} ${y1}A${r} ${r} 0 ${lg} 1 ${x2} ${y2}Z" fill="${col}"/>`;
+    }
+    angle = end;
+  });
+  let legend = '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:6px 14px;margin-top:8px;">';
+  labels.forEach((l, i) => {
+    if (data[i] === 0) return;
+    const pct = Math.round((data[i] / total) * 100);
+    legend += `<div style="display:flex;align-items:center;gap:4px;font-size:11px;"><span style="width:10px;height:10px;border-radius:50%;background:${colors[i % colors.length]};display:inline-block;"></span>${l} (${pct}%)</div>`;
+  });
+  legend += '</div>';
+  const ttl = title ? `<div style="text-align:center;font-size:13px;font-weight:600;margin-bottom:4px;">${title}</div>` : '';
+  return `<div style="text-align:center;">${ttl}<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="max-width:100%;">${paths}</svg>${legend}</div>`;
+}
+
+function _svgBarH(data, labels, color, width) {
+  if (data.length === 0) return '<div style="text-align:center;color:#999;padding:20px;">No data</div>';
+  const max = Math.max(...data, 1);
+  const barH = 24, gap = 6, labelW = 150, chartW = width - labelW - 50;
+  const totalH = data.length * (barH + gap) + 10;
+  let bars = '';
+  data.forEach((val, i) => {
+    const y = i * (barH + gap) + 5;
+    const bw = Math.max(2, (val / max) * chartW);
+    const lbl = labels[i].length > 22 ? labels[i].substring(0, 20) + '…' : labels[i];
+    bars += `<text x="${labelW - 6}" y="${y + barH / 2 + 4}" text-anchor="end" font-size="11" fill="#555" font-family="sans-serif">${lbl}</text>`;
+    bars += `<rect x="${labelW}" y="${y}" width="${bw}" height="${barH}" rx="3" fill="${color}"/>`;
+    bars += `<text x="${labelW + bw + 6}" y="${y + barH / 2 + 4}" font-size="11" fill="#555" font-family="sans-serif">${val}</text>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${totalH}" width="${width}" style="max-width:100%;" height="${totalH}">${bars}</svg>`;
+}
+
 function initCnweReportTab(){
   const f = document.getElementById('cnwe-report-date-from');
   if(f && !f.value) setCnweReportRange('month');
@@ -3435,16 +3497,21 @@ async function generateCnweReport(){
 
     /* ---- RFQ Status Chart ---- */
     if(sections.statusChart){
-      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:380px; height:300px; margin:0 auto;"><canvas id="cnwe-chart-status" width="380" height="300"></canvas></div></div>`;
+      const statusSvg = _svgPieDonut([openR,closedR,draftR], ['Open','Closed','Draft'], ['#4caf50','#f44336','#999'], 260, true);
+      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:380px; margin:0 auto;">${statusSvg}</div></div>`;
     }
 
     /* ---- Applications per RFQ ---- */
     if(sections.appsChart){
-      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px; height:280px;"><canvas id="cnwe-chart-apps" width="700" height="280"></canvas></div></div>`;
+      const appLabels = periodRfqs.map(r=>(r.title||'—').substring(0,30));
+      const appData = periodRfqs.map(r=> applicants.filter(a=>a.rfq===r.id).length);
+      const appsSvg = _svgBarH(appData, appLabels, accentColor, 650);
+      html += `<div style="margin-bottom:30px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px;">${appsSvg}</div></div>`;
     }
 
     /* ---- Supplier Overview ---- */
     if(sections.suppliers){
+      const provSvg = _svgPieDonut(Object.values(provCounts), Object.keys(provCounts), ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 240, true, 'Suppliers by Province');
       html += `
       <div style="margin-bottom:30px;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Supplier Overview</h2>
@@ -3455,7 +3522,7 @@ async function generateCnweReport(){
             <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">New in Period</td><td style="padding:6px 0; text-align:right; font-weight:700; color:${accentColor};">${newS}</td></tr>
             <tr><td style="padding:6px 0;">Avg. Applications per RFQ</td><td style="padding:6px 0; text-align:right; font-weight:700;">${avgApps}</td></tr>
           </table>
-          <div style="max-width:300px; height:300px;"><canvas id="cnwe-chart-provinces" width="300" height="300"></canvas></div>
+          <div style="max-width:300px;">${provSvg}</div>
         </div>
       </div>`;
     }
@@ -3463,6 +3530,7 @@ async function generateCnweReport(){
     /* ---- Submission Status ---- */
     if(sections.submissions){
       const ssLabels = Object.keys(appStatusCounts);
+      const ssSvg = _svgPieDonut(Object.values(appStatusCounts), ssLabels, ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 240, false);
       html += `
       <div style="margin-bottom:30px;">
         <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Application Status Breakdown</h2>
@@ -3471,7 +3539,7 @@ async function generateCnweReport(){
             <thead><tr style="border-bottom:2px solid ${brandColor};"><th style="text-align:left; padding:6px 0;">Status</th><th style="text-align:right; padding:6px 0;">Count</th></tr></thead><tbody>`;
       ssLabels.forEach(s=>{ html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0; text-transform:capitalize;">${s}</td><td style="padding:6px 0; text-align:right; font-weight:700;">${appStatusCounts[s]}</td></tr>`; });
       if(ssLabels.length===0) html += `<tr><td colspan="2" style="padding:12px; text-align:center; color:#999;">No applications in the selected period.</td></tr>`;
-      html += `</tbody></table><div style="max-width:300px; height:300px;"><canvas id="cnwe-chart-app-status" width="300" height="300"></canvas></div></div></div>`;
+      html += `</tbody></table><div style="max-width:300px;">${ssSvg}</div></div></div>`;
     }
 
     /* ---- Clarifications ---- */
@@ -3496,39 +3564,6 @@ async function generateCnweReport(){
     </div>`;
 
     outputEl.innerHTML = html;
-
-    /* ---- Render charts ---- */
-    if(typeof Chart !== 'undefined'){
-      setTimeout(() => {
-      const chartColors = ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'];
-
-      if(sections.statusChart){
-        const ctx = document.getElementById('cnwe-chart-status');
-        if(ctx) new Chart(ctx, { type:'doughnut', data:{ labels:['Open','Closed','Draft'], datasets:[{ data:[openR,closedR,draftR], backgroundColor:['#4caf50','#f44336','#999'] }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{font:{size:11}} } } } });
-      }
-
-      if(sections.appsChart && periodRfqs.length>0){
-        const labels = periodRfqs.map(r=>(r.title||'').substring(0,30));
-        const data = periodRfqs.map(r=> applicants.filter(a=>a.rfq===r.id).length);
-        const ctx = document.getElementById('cnwe-chart-apps');
-        if(ctx) new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ label:'Applications', data, backgroundColor:accentColor }] }, options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{ legend:{display:false} }, scales:{ x:{ beginAtZero:true, ticks:{stepSize:1} } } } });
-      }
-
-      if(sections.suppliers){
-        const pLabels = Object.keys(provCounts);
-        const pData = Object.values(provCounts);
-        const ctx = document.getElementById('cnwe-chart-provinces');
-        if(ctx && pLabels.length>0) new Chart(ctx, { type:'doughnut', data:{ labels:pLabels, datasets:[{ data:pData, backgroundColor:chartColors }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} }, title:{ display:true, text:'Suppliers by Province', font:{size:13} } } } });
-      }
-
-      if(sections.submissions){
-        const ssL = Object.keys(appStatusCounts);
-        const ssD = Object.values(appStatusCounts);
-        const ctx = document.getElementById('cnwe-chart-app-status');
-        if(ctx && ssL.length>0) new Chart(ctx, { type:'pie', data:{ labels:ssL, datasets:[{ data:ssD, backgroundColor:chartColors }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{font:{size:10}} } } } });
-      }
-      }, 100);
-    }
 
     document.getElementById('cnwe-report-pdf-btn').style.display='inline-block';
     document.getElementById('cnwe-report-word-btn').style.display='inline-block';
@@ -3567,20 +3602,9 @@ function downloadCnweReportWord(){
   const filename = `CNWE_Energy_Report_${fromDate}_to_${toDate}.doc`;
 
   const clone = el.cloneNode(true);
-  const canvases = el.querySelectorAll('canvas');
-  const cloneCanvases = clone.querySelectorAll('canvas');
-  canvases.forEach((c,i)=>{
-    try{
-      const img=document.createElement('img');
-      img.src=c.toDataURL('image/png');
-      img.style.cssText=c.style.cssText||'';
-      img.style.maxWidth='100%';
-      if(cloneCanvases[i]&&cloneCanvases[i].parentNode) cloneCanvases[i].parentNode.replaceChild(img,cloneCanvases[i]);
-    }catch(e){}
-  });
 
   const htmlContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-    <head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#222;}table{border-collapse:collapse;width:100%;}td,th{padding:4pt 6pt;border:1px solid #ddd;}img{max-width:100%;}</style></head>
+    <head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#222;}table{border-collapse:collapse;width:100%;}td,th{padding:4pt 6pt;border:1px solid #ddd;}img{max-width:100%;}svg{max-width:100%;}</style></head>
     <body>${clone.innerHTML}</body></html>`;
 
   const blob = new Blob(['﻿', htmlContent], {type:'application/msword'});
