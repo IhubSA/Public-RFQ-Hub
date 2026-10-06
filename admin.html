@@ -135,7 +135,10 @@
           <h1>Requests for clarification</h1>
           <div class="desc">Questions from prospective bidders. Answer privately to just them, or publish so every current and future bidder on that tender sees the same information.</div>
         </div>
-        <select id="clar-filter-rfq" onchange="renderClarifications()" style="width:auto; min-width:220px;"><option value="all">All RFQs</option></select>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <select id="clar-filter-rfq" onchange="renderClarifications()" style="width:auto; min-width:220px;"><option value="all">All RFQs</option></select>
+          <button class="btn gold" id="btn-issue-addendum" onclick="openIssueAddendum()" style="display:none;">+ Issue addendum</button>
+        </div>
       </div>
       <div class="panel">
         <div class="panel-body" style="padding:0;">
@@ -492,6 +495,27 @@
   <div class="modal-foot">
     <button class="btn secondary" onclick="closeAll()">Cancel</button>
     <button class="btn gold" onclick="submitClarificationAnswer()">Send answer</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-issue-addendum">
+  <div class="modal-head"><h3>Issue an addendum / clarification</h3><button class="drawer-close" style="position:static;" onclick="closeAll()">✕</button></div>
+  <div class="modal-body">
+    <div style="font-size:13px; color:var(--ink); margin-bottom:12px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius);">Published straight to the public tender listing for the RFQ you choose, without needing a bidder to ask a question first.</div>
+    <label>RFQ</label>
+    <select id="add-rfq"></select>
+    <label>Title</label>
+    <input type="text" id="add-title" placeholder="e.g. Addendum 1 — Closing date extended / Clarification on site access">
+    <label>Details</label>
+    <textarea id="add-text" placeholder="The full text of the addendum or clarification" style="min-height:140px;"></textarea>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-weight:400; font-size:13px;">
+      <input type="checkbox" id="add-notify" checked style="width:auto; margin-top:3px;">
+      <span>Also email everyone who has already applied to this RFQ (excludes unsuccessful applicants)</span>
+    </label>
+  </div>
+  <div class="modal-foot">
+    <button class="btn secondary" onclick="closeAll()">Cancel</button>
+    <button class="btn gold" onclick="submitIssueAddendum()">Publish addendum</button>
   </div>
 </div>
 
