@@ -1,4 +1,4 @@
-  :root{
+:root{
     --paper:#F5F8F8;
     --paper-2:#E9F1F1;
     --ink:#0B3654;
@@ -409,3 +409,43 @@
   @media (max-width: 480px){
     .modal-date-row{flex-direction:column; gap:0;}
   }
+
+
+  /* ---------- overdue review highlighting ---------- */
+  .kd-alarm{
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    background:var(--rust); color:#fff; border-radius:var(--radius);
+    padding:18px 22px; margin-bottom:18px; box-shadow:0 4px 18px rgba(184,14,10,.35);
+    border:3px solid #7d0906; animation:kd-alarm-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes kd-alarm-pulse{ 0%,100%{box-shadow:0 4px 18px rgba(184,14,10,.35);} 50%{box-shadow:0 4px 28px rgba(184,14,10,.75);} }
+  @media (prefers-reduced-motion: reduce){ .kd-alarm{animation:none;} }
+  .kd-alarm-icon{font-size:44px; line-height:1;}
+  .kd-alarm-body{flex:1; min-width:240px;}
+  .kd-alarm-title{font-size:26px; font-weight:800; letter-spacing:.03em; line-height:1.15;}
+  .kd-alarm-text{font-size:15px; margin-top:6px;}
+  .kd-alarm-sub{font-size:12.5px; margin-top:4px; opacity:.9;}
+  .kd-alarm-btn{
+    background:#fff; color:var(--rust); border:0; border-radius:var(--radius);
+    font-weight:700; font-size:14px; padding:12px 18px; cursor:pointer;
+  }
+  .kd-alarm-btn:hover{background:#ffeceb;}
+
+  .od-strip{display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:10px 14px; border-radius:var(--radius); margin-bottom:12px; font-size:13px;}
+  .od-strip.bad{background:var(--rust-bg); color:var(--rust); border:1px solid var(--rust);}
+  .od-strip.ok{background:var(--sage-bg); color:var(--sage); border:1px solid var(--sage);}
+  .od-strip .btn{margin-left:auto;}
+
+  .kcol-head.chev{
+    color:#fff; border:0; padding:9px 22px 9px 14px; margin-bottom:0; align-items:center;
+    clip-path:polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%);
+    text-transform:none; letter-spacing:0; font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .kcol-head.chev.bad{background:var(--rust);}
+  .kcol-head.chev.unsuc{background:#7b8794;}
+  .kcol-head .chev-name{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:8px;}
+  .kcol-head .chev-count{background:rgba(255,255,255,.25); border-radius:10px; padding:0 8px; font-weight:700;}
+  .kcol-sub{font-size:11px; color:var(--ink-3); padding:5px 4px 8px 4px; border-bottom:2px solid var(--line); margin-bottom:10px;}
+  .kcol-sub.bad{color:var(--rust); font-weight:700; border-bottom-color:var(--rust);}
+  .kcard.overdue{border-left-color:var(--rust); background:var(--rust-bg);}
+  .kcard .od-tag{font-size:10px; font-weight:800; letter-spacing:.04em; color:#fff; background:var(--rust); border-radius:3px; padding:2px 6px; display:inline-block; margin-bottom:6px;}
