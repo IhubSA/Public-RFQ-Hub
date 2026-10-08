@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.39.0",
-  date: "2026-10-06",
+  version: "2.39.1",
+  date: "2026-10-08",
   changelog: [
+    "2.39.1 (2026-10-08) — New RFQs now default to the Free State only, since that's where CNWE tenders. The other eight provinces are tucked behind \"+ Add more provinces\" on the RFQ form, so staff can widen the supplier search whenever they want; editing an RFQ that already covers other provinces shows them automatically.",
     "2.39.0 (2026-10-06) — Staff can now issue an addendum or clarification without waiting for a bidder to ask a question: Communications → Clarifications → \"+ Issue addendum\". It publishes straight to that RFQ's public listing under a separate \"Addenda & notices\" heading, and can optionally email every applicant already on the RFQ (excluding unsuccessful ones). Also fixes the RFQ-ID collision that overwrote live RFQs: new RFQ and required-document IDs now use the time+random generator instead of the per-tab counter.",
     "2.38.4 (2026-08-27) — The applicant case drawer was a fixed 460px wide regardless of screen size, which felt genuinely cramped on a real desktop monitor when reviewing several documents and comment fields at once. It's now 680px (still capping at 92% of the screen width on anything narrower, so it doesn't break on a smaller laptop or tablet), with the base text size and line spacing throughout nudged up too \u2014 document names, contact fields, and comment boxes all have real room to breathe instead of wrapping awkwardly. This is a pure layout change; nothing about how the drawer loads or displays data was touched. Verified by actually rendering it with realistic case data (documents, evaluation, assignment) rather than just eyeballing the CSS numbers \u2014 confirmed the wider layout looks clean and correctly proportioned before shipping.",
     "2.38.3 (2026-08-26) — The public portal can now be linked directly into a specific RFQ's application form via ?apply=RFQ-ID, rather than only ever landing on the general listing and requiring the applicant to find it themselves. This runs through the exact same click path as the real \"Apply now\" button, including the required POPIA consent step — it's not a shortcut that skips it. A closed or nonexistent RFQ in the link shows a clear message instead of silently failing or opening a broken form. This exists specifically to support duplicate listings on the IhubSA Contractor Hub: since CNWE's own applicant pipeline lives only in this system, an application submitted through the Contractor Hub's own registration flow for a CNWE-originated RFQ would never actually reach CNWE staff. Redirecting Apply on the Contractor Hub side back to this link is the fix \u2014 that redirect itself needs to be built in the Contractor Hub's own frontend code, which is outside this system and not something available to edit from here. Verified directly: a genuinely open RFQ correctly triggers the real apply flow, a closed RFQ shows the right message instead of opening the form, an invalid RFQ ID fails gracefully without crashing the page, and normal listing behaviour is completely unaffected when the parameter isn't present at all.",
@@ -904,6 +905,26 @@ function removeNrApprover(employeeId){
 }
 function setNrProvinceCheckboxes(provinces){
   document.querySelectorAll('.nr-province-cb').forEach(cb=>{ cb.checked = (provinces||[]).includes(cb.value); });
+  // CNWE tenders are Free State by default; the other provinces stay tucked away
+  // unless this RFQ already covers one of them.
+  showNrProvincesMore((provinces||[]).some(p=>p!=='Free State'));
+}
+function showNrProvincesMore(show){
+  const more = document.getElementById('nr-provinces-more');
+  const link = document.getElementById('nr-provinces-toggle');
+  if(!more || !link) return;
+  more.style.display = show ? 'flex' : 'none';
+  link.textContent = show ? '− Show Free State only' : '+ Add more provinces';
+}
+function toggleNrProvincesMore(ev){
+  if(ev) ev.preventDefault();
+  const more = document.getElementById('nr-provinces-more');
+  const showing = more.style.display !== 'none';
+  if(showing){
+    // collapsing back to Free State only: untick the extra provinces so nothing is hidden-but-selected
+    more.querySelectorAll('.nr-province-cb').forEach(cb=>{ cb.checked = false; });
+  }
+  showNrProvincesMore(!showing);
 }
 function getNrProvinceCheckboxes(){
   return Array.from(document.querySelectorAll('.nr-province-cb')).filter(cb=>cb.checked).map(cb=>cb.value);
@@ -921,7 +942,7 @@ function openNewRfq(){
   document.getElementById('nr-open').value='';
   document.getElementById('nr-close').value='';
   document.getElementById('nr-desc').value='';
-  setNrProvinceCheckboxes([]);
+  setNrProvinceCheckboxes(['Free State']);
   document.getElementById('nr-town').value = '';
   renderNrApproverList([]);
   renderNrDocList();
