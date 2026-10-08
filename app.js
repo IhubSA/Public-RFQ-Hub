@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.39.1",
+  version: "2.40.0",
   date: "2026-10-08",
   changelog: [
+    "2.40.0 (2026-10-08) \u2014 Overdue review tracking. The dashboard now shows a large red \"APPLICATIONS ARE NOT BEING PROCESSED\" banner whenever any application has sat in a review stage with no recorded action for longer than that stage's allowance (Application Received 2 days, Under Screening/Validation 3, Proposal Submitted 2, Assigned for Evaluation 3, Under Evaluation 7, Recommendation Recorded 3 \u2014 editable in REVIEW_SLA_DAYS), and disappears once the backlog is cleared. The applicant pipeline gets chevron stage headers with an overdue count per stage, overdue cards highlighted in red and sorted to the top with how many days they've waited, a summary strip and a Show-overdue-only filter. Province on a new RFQ is now fixed to the Free State (no other provinces can be added).",
     "2.39.1 (2026-10-08) — New RFQs now default to the Free State only, since that's where CNWE tenders. The other eight provinces are tucked behind \"+ Add more provinces\" on the RFQ form, so staff can widen the supplier search whenever they want; editing an RFQ that already covers other provinces shows them automatically.",
     "2.39.0 (2026-10-06) — Staff can now issue an addendum or clarification without waiting for a bidder to ask a question: Communications → Clarifications → \"+ Issue addendum\". It publishes straight to that RFQ's public listing under a separate \"Addenda & notices\" heading, and can optionally email every applicant already on the RFQ (excluding unsuccessful ones). Also fixes the RFQ-ID collision that overwrote live RFQs: new RFQ and required-document IDs now use the time+random generator instead of the per-tab counter.",
     "2.38.4 (2026-08-27) — The applicant case drawer was a fixed 460px wide regardless of screen size, which felt genuinely cramped on a real desktop monitor when reviewing several documents and comment fields at once. It's now 680px (still capping at 92% of the screen width on anything narrower, so it doesn't break on a smaller laptop or tablet), with the base text size and line spacing throughout nudged up too \u2014 document names, contact fields, and comment boxes all have real room to breathe instead of wrapping awkwardly. This is a pure layout change; nothing about how the drawer loads or displays data was touched. Verified by actually rendering it with realistic case data (documents, evaluation, assignment) rather than just eyeballing the CSS numbers \u2014 confirmed the wider layout looks clean and correctly proportioned before shipping.",
@@ -133,6 +134,39 @@ const KANBAN_STAGES = [
   "Onboarding",                 // 16 Onboard
   "Closed"                      // 17 Close
 ];
+
+/* ---- Overdue review tracking ----
+   A case is "overdue" when it's sitting in a stage that is waiting on staff and
+   nothing has been recorded against it for longer than that stage's allowance.
+   Allowances are in days; change a number here to tighten or relax a stage. */
+const REVIEW_SLA_DAYS = {
+  "Application Received":   2,
+  "Under Screening":        3,
+  "Under Validation":       3,
+  "Proposal Submitted":     2,
+  "Assigned for Evaluation":3,
+  "Under Evaluation":       7,
+  "Recommendation Recorded":3,
+};
+function lastActivityMs(a){
+  let latest = 0;
+  (a.timeline||[]).forEach(t=>{ const v = Date.parse(t.at || t.date); if(v && v>latest) latest = v; });
+  if(!latest) latest = Date.parse(a.createdAt || a.received) || 0;
+  return latest;
+}
+/* returns null when not overdue, else {days (since last activity), sla, over (days past allowance)} */
+function overdueInfo(a){
+  const sla = REVIEW_SLA_DAYS[a.status];
+  if(!sla) return null;
+  const last = lastActivityMs(a);
+  if(!last) return null;
+  const days = Math.floor((Date.now() - last) / 86400000);
+  if(days <= sla) return null;
+  return { days, sla, over: days - sla };
+}
+function overdueApplicants(){
+  return applicants.filter(a=>overdueInfo(a)).sort((x,y)=>overdueInfo(y).days - overdueInfo(x).days);
+}
 
 /* The 3 official regret exits from the flow diagram (red arrows) — only these
    stages can end a case as Unsuccessful, each with its own reason pool. */
@@ -660,7 +694,27 @@ function kdLine(values, w, h, color){
   </svg>`;
 }
 
+function renderProcessingAlert(){
+  const el = document.getElementById('kd-alert');
+  if(!el) return;
+  const od = overdueApplicants();
+  if(!od.length){ el.innerHTML = ''; return; }
+  const oldest = overdueInfo(od[0]).days;
+  const byStage = {};
+  od.forEach(a=>{ byStage[a.status] = (byStage[a.status]||0) + 1; });
+  const breakdown = Object.keys(byStage).map(k=>`${byStage[k]} in ${k}`).join(' · ');
+  el.innerHTML = `<div class="kd-alarm" role="alert">
+    <div class="kd-alarm-icon">⚠</div>
+    <div class="kd-alarm-body">
+      <div class="kd-alarm-title">APPLICATIONS ARE NOT BEING PROCESSED</div>
+      <div class="kd-alarm-text"><strong>${od.length} application${od.length===1?'':'s'}</strong> ${od.length===1?'is':'are'} overdue for review — the oldest has had no action for <strong>${oldest} days</strong>.</div>
+      <div class="kd-alarm-sub">${breakdown}</div>
+    </div>
+    <button class="kd-alarm-btn" onclick="showOverdueApplications()">Review overdue applications →</button>
+  </div>`;
+}
 function renderDashboard(){
+  renderProcessingAlert();
   const activeRfqs = rfqs.filter(r=>!["Draft","Cancelled","Closed"].includes(r.status));
   const draftRfqs = rfqs.filter(r=>r.status==="Draft");
   const totalValue = activeRfqs.reduce((s,r)=>s+r.budget,0);
@@ -903,32 +957,10 @@ function removeNrApprover(employeeId){
   newRfqApprovers = newRfqApprovers.filter(id=>id!==employeeId);
   renderNrApproverList(newRfqApprovers);
 }
-function setNrProvinceCheckboxes(provinces){
-  document.querySelectorAll('.nr-province-cb').forEach(cb=>{ cb.checked = (provinces||[]).includes(cb.value); });
-  // CNWE tenders are Free State by default; the other provinces stay tucked away
-  // unless this RFQ already covers one of them.
-  showNrProvincesMore((provinces||[]).some(p=>p!=='Free State'));
-}
-function showNrProvincesMore(show){
-  const more = document.getElementById('nr-provinces-more');
-  const link = document.getElementById('nr-provinces-toggle');
-  if(!more || !link) return;
-  more.style.display = show ? 'flex' : 'none';
-  link.textContent = show ? '− Show Free State only' : '+ Add more provinces';
-}
-function toggleNrProvincesMore(ev){
-  if(ev) ev.preventDefault();
-  const more = document.getElementById('nr-provinces-more');
-  const showing = more.style.display !== 'none';
-  if(showing){
-    // collapsing back to Free State only: untick the extra provinces so nothing is hidden-but-selected
-    more.querySelectorAll('.nr-province-cb').forEach(cb=>{ cb.checked = false; });
-  }
-  showNrProvincesMore(!showing);
-}
-function getNrProvinceCheckboxes(){
-  return Array.from(document.querySelectorAll('.nr-province-cb')).filter(cb=>cb.checked).map(cb=>cb.value);
-}
+/* CNWE only runs tenders in the Free State, so the province is fixed rather than selectable. */
+const CNWE_PROVINCES = ['Free State'];
+function setNrProvinceCheckboxes(){ /* province is fixed — nothing to set */ }
+function getNrProvinceCheckboxes(){ return CNWE_PROVINCES.slice(); }
 function openNewRfq(){
   editingRfqId = null;
   document.getElementById('nr-modal-title').textContent = 'New RFQ record';
@@ -1118,26 +1150,68 @@ function populateRfqFilter(){
   sel.innerHTML = `<option value="all">All RFQs</option>` + rfqs.map(r=>`<option value="${r.id}">${r.id} — ${r.title}</option>`).join('');
 }
 
+let pipelineOverdueOnly = false;
+function togglePipelineOverdueOnly(){
+  pipelineOverdueOnly = !pipelineOverdueOnly;
+  renderApplicants();
+}
+function showOverdueApplications(){
+  pipelineOverdueOnly = true;
+  switchView('applicants');
+}
 function renderApplicants(){
   const filter = document.getElementById('rfq-filter').value || 'all';
   const list = applicants.filter(a=> filter==='all' || a.rfq===filter);
+  const overdueAll = list.filter(a=>overdueInfo(a));
   const kanban = document.getElementById('kanban');
-  const cols = KANBAN_STAGES.map(stage=>{
-    const items = list.filter(a=>a.status===stage);
+
+  /* summary strip above the board */
+  const strip = document.getElementById('pipeline-overdue-strip');
+  if(strip){
+    const oldest = overdueAll.reduce((m,a)=>Math.max(m, overdueInfo(a).days), 0);
+    strip.innerHTML = overdueAll.length
+      ? `<div class="od-strip bad"><strong>${overdueAll.length} application${overdueAll.length===1?'':'s'} overdue for review</strong><span>oldest has had no action for ${oldest} days</span>
+           <button class="btn small ${pipelineOverdueOnly?'gold':'secondary'}" onclick="togglePipelineOverdueOnly()">${pipelineOverdueOnly?'Showing overdue only — show all':'Show overdue only'}</button></div>`
+      : `<div class="od-strip ok"><strong>No applications are overdue for review</strong></div>`;
+  }
+
+  const total = Math.max(KANBAN_STAGES.length - 1, 1);
+  const cols = KANBAN_STAGES.map((stage, idx)=>{
+    let items = list.filter(a=>a.status===stage);
+    const overdueItems = items.filter(a=>overdueInfo(a));
+    if(pipelineOverdueOnly) items = overdueItems;
+    items = items.slice().sort((x,y)=>{
+      const ox = overdueInfo(x), oy = overdueInfo(y);
+      if(ox && !oy) return -1;
+      if(!ox && oy) return 1;
+      if(ox && oy) return oy.days - ox.days;
+      return 0;
+    });
     const doneStage = ["Contract Signed","Onboarding","Closed"].includes(stage);
+    const sla = REVIEW_SLA_DAYS[stage];
+    const hue = Math.round(205 + (idx/total)*0);  /* same blue family, lightness steps with progress */
+    const light = 62 - Math.round((idx/total)*30);
+    const bad = overdueItems.length > 0;
     return `<div class="kcol">
-      <div class="kcol-head" onclick="this.parentElement.classList.toggle('collapsed')"><span>${stage}</span><span>${items.length}</span></div>
+      <div class="kcol-head chev ${bad?'bad':''}" style="${bad?'':`background:hsl(${hue} 70% ${light}%);`}" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="chev-name">${stage}</span><span class="chev-count">${list.filter(a=>a.status===stage).length}</span>
+      </div>
+      <div class="kcol-sub ${bad?'bad':''}">${bad ? `⚠ ${overdueItems.length} overdue` : (sla ? `Review within ${sla} day${sla===1?'':'s'}` : '&nbsp;')}</div>
       <div class="kcol-cards">
-        ${items.map(a=>`<div class="kcard ${doneStage?'awarded':''}" onclick="openApplicant('${a.id}')">
+        ${items.map(a=>{
+          const od = overdueInfo(a);
+          return `<div class="kcard ${doneStage?'awarded':''} ${od?'overdue':''}" onclick="openApplicant('${a.id}')">
+          ${od ? `<div class="od-tag">OVERDUE · ${od.days} days without action</div>` : ''}
           <div class="biz">${a.business}</div>
           <div class="ref mono">${a.id} · ${rfqTitle(a.rfq).split(' ').slice(0,3).join(' ')}…</div>
-        </div>`).join('')}
+        </div>`;}).join('')}
       </div>
     </div>`;
   }).join('');
   const unsuccessful = list.filter(a=>a.status==="Unsuccessful");
-  const unsCol = `<div class="kcol">
-    <div class="kcol-head" onclick="this.parentElement.classList.toggle('collapsed')"><span>Unsuccessful</span><span>${unsuccessful.length}</span></div>
+  const unsCol = pipelineOverdueOnly ? '' : `<div class="kcol">
+    <div class="kcol-head chev unsuc" onclick="this.parentElement.classList.toggle('collapsed')"><span class="chev-name">Unsuccessful</span><span class="chev-count">${unsuccessful.length}</span></div>
+    <div class="kcol-sub">&nbsp;</div>
     <div class="kcol-cards">
       ${unsuccessful.map(a=>`<div class="kcard unsuccessful" onclick="openApplicant('${a.id}')">
         <div class="biz">${a.business}</div><div class="ref mono">${a.id}</div>
@@ -3274,11 +3348,11 @@ async function loadFromSupabase(){
 
   const timelineByApplicant = {};
   (tlRes.data||[]).forEach(t=>{
-    (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, action:t.action, actor:t.actor, note:t.note||''});
+    (timelineByApplicant[t.applicant_id] = timelineByApplicant[t.applicant_id]||[]).push({date:t.event_date, at:t.created_at, action:t.action, actor:t.actor, note:t.note||''});
   });
 
   rfqs = (rfqRes.data||[]).map(r=>({id:r.id, title:r.title, category:r.category, status:r.status, budget:Number(r.budget), open:r.open_date, close:r.close_date, desc:r.description, requiredDocs:r.required_docs||[], attachments:r.attachments||[], pendingStatusChange:r.pending_status_change||null, extensionNotices:r.extension_notices||[], assignedApproverIds:r.assigned_approver_ids||[], supplierNotifiedAt:r.supplier_notification_sent_at||null, provinces:r.provinces||[], town:r.town||'', contractorHubRfqId:r.contractor_hub_rfq_id||null}));
-  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
+  applicants = (appRes.data||[]).map(a=>({id:a.id, rfq:a.rfq_id, business:a.business, companyRegNo:a.company_reg_no, name:a.contact_name, position:a.position, email:a.email, phone:a.phone, comments:a.comments, status:a.status, received:a.received_date, createdAt:a.created_at, reason:a.reason, documents:a.documents||[], timeline: timelineByApplicant[a.id] || [], proposal:a.proposal||null, proposalToken:a.proposal_token||null, proposalDeadline:a.proposal_deadline||null, assignedTo:a.assigned_to||[], infoRequests:a.info_requests||[]}));
   audit = (auditRes.data||[]).map(e=>({ts: (e.ts||'').replace('T',' ').slice(0,16), action:e.action, who:e.who, note:e.note||''}));
   suppliers = (supRes.data||[]).map(s=>({
     id:s.id, name:s.name, companyName:s.company_name, email:s.email, phone:s.phone||'', status:s.status, source:s.source, createdAt:s.created_at,
