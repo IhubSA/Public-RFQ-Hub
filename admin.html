@@ -32,6 +32,7 @@
       <div class="tab" data-view="clarifications"><span class="num">07</span><span class="label">Clarifications</span></div>
       <div class="tab" data-view="suppliers"><span class="num">08</span><span class="label">Suppliers</span></div>
       <div class="tab" data-view="employees"><span class="num">09</span><span class="label">System Users &amp; Admin</span></div>
+      <div class="tab" data-view="reports"><span class="num">10</span><span class="label">Reports</span></div>
     </nav>
     <div class="role-toggle">
       <a id="btn-public" href="index.html" target="_blank" rel="noopener" style="display:block; text-align:center; text-decoration:none;">View public portal ↗</a>
@@ -57,8 +58,6 @@
             <button class="btn gold" onclick="openNewRfq()">+ New RFQ</button>
           </div>
         </div>
-
-        <div id="kd-alert"></div>
 
         <div class="kd-stats" id="kd-stats"></div>
 
@@ -179,7 +178,6 @@
         </div>
         <select id="rfq-filter" style="width:auto;" onchange="renderApplicants()"></select>
       </div>
-      <div id="pipeline-overdue-strip"></div>
       <div class="kanban-scroll">
         <div class="kanban" id="kanban"></div>
       </div>
@@ -269,6 +267,56 @@
           <table id="employees-table"></table>
         </div>
       </div>
+    </section>
+
+    <!-- REPORTS -->
+    <section class="view" id="view-reports">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">Insights</div>
+          <h1>Reports</h1>
+          <div class="desc">Select a date range and sections, then generate a branded report you can download as PDF or Word.</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Report Settings</h3></div>
+        <div class="panel-body" style="padding:18px;">
+          <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:flex-end; margin-bottom:20px;">
+            <div>
+              <label style="font-weight:600; display:block; margin-bottom:6px; font-size:13px; color:var(--ink-2);">From</label>
+              <input type="date" id="cnwe-report-date-from" style="padding:8px 12px; border:1px solid var(--stroke); border-radius:var(--radius); font-size:14px; background:var(--paper-2); color:var(--ink);">
+            </div>
+            <div>
+              <label style="font-weight:600; display:block; margin-bottom:6px; font-size:13px; color:var(--ink-2);">To</label>
+              <input type="date" id="cnwe-report-date-to" style="padding:8px 12px; border:1px solid var(--stroke); border-radius:var(--radius); font-size:14px; background:var(--paper-2); color:var(--ink);">
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn secondary small" onclick="setCnweReportRange('week')">This Week</button>
+              <button class="btn secondary small" onclick="setCnweReportRange('month')">This Month</button>
+              <button class="btn secondary small" onclick="setCnweReportRange('quarter')">This Quarter</button>
+              <button class="btn secondary small" onclick="setCnweReportRange('year')">This Year</button>
+            </div>
+          </div>
+          <div style="margin-bottom:20px;">
+            <label style="font-weight:600; display:block; margin-bottom:8px; font-size:13px; color:var(--ink-2);">Include in Report:</label>
+            <div style="display:flex; flex-wrap:wrap; gap:12px;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-summary" checked> Executive Summary</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-rfqs" checked> RFQ Register</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-status-chart" checked> RFQ Status Chart</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-apps-chart" checked> Applications per RFQ</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-suppliers" checked> Supplier Overview</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-submissions" checked> Submission Status</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; color:var(--ink);"><input type="checkbox" id="cnwe-rpt-clarifications" checked> Clarifications</label>
+            </div>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn gold" onclick="generateCnweReport()">Generate Report</button>
+            <button class="btn secondary" id="cnwe-report-pdf-btn" style="display:none;" onclick="downloadCnweReportPDF()">Download PDF</button>
+            <button class="btn secondary" id="cnwe-report-word-btn" style="display:none;" onclick="downloadCnweReportWord()">Download Word</button>
+          </div>
+        </div>
+      </div>
+      <div id="cnwe-report-output" style="margin-top:20px;"></div>
     </section>
 
   </main>
@@ -383,8 +431,18 @@
       <div style="flex:1;"><label>Closes</label><input type="datetime-local" id="nr-close"></div>
     </div>
     <label>Province(s)</label>
-    <div id="nr-provinces" style="padding:10px 12px; background:var(--paper-2); border-radius:var(--radius); margin-bottom:4px; font-weight:600;">Free State</div>
-    <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">CNWE tenders are issued for the Free State only. When published, suppliers registered in the Free State (or registered for all provinces) are emailed automatically.</div>
+    <div id="nr-provinces" style="display:flex; flex-wrap:wrap; gap:6px 16px; padding:10px 12px; background:var(--paper-2); border-radius:var(--radius); margin-bottom:4px;">
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Eastern Cape" style="width:auto;"> Eastern Cape</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Free State" style="width:auto;"> Free State</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Gauteng" style="width:auto;"> Gauteng</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="KwaZulu-Natal" style="width:auto;"> KwaZulu-Natal</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Limpopo" style="width:auto;"> Limpopo</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Mpumalanga" style="width:auto;"> Mpumalanga</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Northern Cape" style="width:auto;"> Northern Cape</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="North West" style="width:auto;"> North West</label>
+      <label style="display:flex; align-items:center; gap:5px; font-weight:400; margin:0;"><input type="checkbox" class="nr-province-cb" value="Western Cape" style="width:auto;"> Western Cape</label>
+    </div>
+    <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">Select where this tender applies. When published, suppliers registered in any of these provinces (or registered for all provinces) are emailed automatically. Leave none selected to notify every active supplier regardless of province.</div>
     <label>Town / city (optional)</label>
     <input type="text" id="nr-town" placeholder="e.g. Boshof, or leave blank if not site-specific">
     <div style="font-size:11.5px; color:var(--ink-3); margin:-2px 0 8px 0;">Shown alongside the province(s) on the public listing, for tenderers' reference only — it has no effect on which suppliers get notified.</div>
@@ -699,7 +757,8 @@
 <div id="toast-wrap"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js"></script>
+<script src="app.js?v=4"></script>
 <script>initAdminPage();</script>
 </body>
 </html>
