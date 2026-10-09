@@ -3364,3 +3364,362 @@ async function loadFromSupabase(){
     specialPermitsDocumentPath:s.special_permits_document_path||null, otherDocuments:s.other_documents||[],
   }));
 }
+
+/* ============================================================
+   REPORTS
+   ============================================================ */
+
+/* ── SVG Chart Helpers (no external library needed) ── */
+function _svgPieDonut(data, labels, colors, size, donut, title) {
+  const total = data.reduce((a, b) => a + b, 0);
+  if (total === 0) return '<div style="text-align:center;color:#999;padding:20px;">No data</div>';
+  const cx = size / 2, cy = size / 2, r = size / 2 - 10;
+  const innerR = donut ? r * 0.55 : 0;
+  let angle = -Math.PI / 2, paths = '';
+  const nonZero = data.filter(v => v > 0).length;
+  data.forEach((val, i) => {
+    if (val === 0) return;
+    const col = colors[i % colors.length];
+    if (nonZero === 1) {
+      if (donut) {
+        paths += `<path d="M${cx} ${cy - r}A${r} ${r} 0 1 1 ${cx} ${cy + r}A${r} ${r} 0 1 1 ${cx} ${cy - r}Z M${cx} ${cy - innerR}A${innerR} ${innerR} 0 1 0 ${cx} ${cy + innerR}A${innerR} ${innerR} 0 1 0 ${cx} ${cy - innerR}Z" fill="${col}" fill-rule="evenodd"/>`;
+      } else {
+        paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${col}"/>`;
+      }
+      angle += (val / total) * 2 * Math.PI;
+      return;
+    }
+    const sweep = (val / total) * 2 * Math.PI;
+    const end = angle + sweep;
+    const lg = sweep > Math.PI ? 1 : 0;
+    const x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
+    const x2 = cx + r * Math.cos(end),   y2 = cy + r * Math.sin(end);
+    if (donut) {
+      const ix1 = cx + innerR * Math.cos(angle), iy1 = cy + innerR * Math.sin(angle);
+      const ix2 = cx + innerR * Math.cos(end),   iy2 = cy + innerR * Math.sin(end);
+      paths += `<path d="M${x1} ${y1}A${r} ${r} 0 ${lg} 1 ${x2} ${y2}L${ix2} ${iy2}A${innerR} ${innerR} 0 ${lg} 0 ${ix1} ${iy1}Z" fill="${col}"/>`;
+    } else {
+      paths += `<path d="M${cx} ${cy}L${x1} ${y1}A${r} ${r} 0 ${lg} 1 ${x2} ${y2}Z" fill="${col}"/>`;
+    }
+    angle = end;
+  });
+  let legend = '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:6px 14px;margin-top:8px;">';
+  labels.forEach((l, i) => {
+    if (data[i] === 0) return;
+    const pct = Math.round((data[i] / total) * 100);
+    legend += `<div style="display:flex;align-items:center;gap:4px;font-size:11px;"><span style="width:10px;height:10px;border-radius:50%;background:${colors[i % colors.length]};display:inline-block;"></span>${l} (${pct}%)</div>`;
+  });
+  legend += '</div>';
+  const ttl = title ? `<div style="text-align:center;font-size:13px;font-weight:600;margin-bottom:4px;">${title}</div>` : '';
+  return `<div style="text-align:center;">${ttl}<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="max-width:100%;">${paths}</svg>${legend}</div>`;
+}
+
+function _svgBarH(data, labels, color, width) {
+  if (data.length === 0) return '<div style="text-align:center;color:#999;padding:20px;">No data</div>';
+  const max = Math.max(...data, 1);
+  const barH = 24, gap = 6, labelW = 150, chartW = width - labelW - 50;
+  const totalH = data.length * (barH + gap) + 10;
+  let bars = '';
+  data.forEach((val, i) => {
+    const y = i * (barH + gap) + 5;
+    const bw = Math.max(2, (val / max) * chartW);
+    const lbl = labels[i].length > 22 ? labels[i].substring(0, 20) + '…' : labels[i];
+    bars += `<text x="${labelW - 6}" y="${y + barH / 2 + 4}" text-anchor="end" font-size="11" fill="#555" font-family="sans-serif">${lbl}</text>`;
+    bars += `<rect x="${labelW}" y="${y}" width="${bw}" height="${barH}" rx="3" fill="${color}"/>`;
+    bars += `<text x="${labelW + bw + 6}" y="${y + barH / 2 + 4}" font-size="11" fill="#555" font-family="sans-serif">${val}</text>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${totalH}" width="${width}" style="max-width:100%;" height="${totalH}">${bars}</svg>`;
+}
+
+function initCnweReportTab(){
+  const f = document.getElementById('cnwe-report-date-from');
+  if(f && !f.value) setCnweReportRange('month');
+}
+
+function setCnweReportRange(preset){
+  const fromEl = document.getElementById('cnwe-report-date-from');
+  const toEl   = document.getElementById('cnwe-report-date-to');
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  toEl.value = fmt(now);
+  if(preset==='week'){ const d=new Date(now); d.setDate(d.getDate()-d.getDay()); fromEl.value=fmt(d); }
+  else if(preset==='month') fromEl.value=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`;
+  else if(preset==='quarter'){ const qm=Math.floor(now.getMonth()/3)*3; fromEl.value=`${now.getFullYear()}-${pad(qm+1)}-01`; }
+  else if(preset==='year') fromEl.value=`${now.getFullYear()}-01-01`;
+}
+
+async function generateCnweReport(){
+  const fromDate = document.getElementById('cnwe-report-date-from').value;
+  const toDate   = document.getElementById('cnwe-report-date-to').value;
+  if(!fromDate||!toDate){ toast("Missing dates","Please select a date range."); return; }
+  if(fromDate>toDate){ toast("Invalid range","The 'From' date must be before the 'To' date."); return; }
+
+  const sections = {
+    summary:       document.getElementById('cnwe-rpt-summary').checked,
+    rfqs:          document.getElementById('cnwe-rpt-rfqs').checked,
+    statusChart:   document.getElementById('cnwe-rpt-status-chart').checked,
+    appsChart:     document.getElementById('cnwe-rpt-apps-chart').checked,
+    suppliers:     document.getElementById('cnwe-rpt-suppliers').checked,
+    submissions:   document.getElementById('cnwe-rpt-submissions').checked,
+    clarifications:document.getElementById('cnwe-rpt-clarifications').checked
+  };
+
+  toast("Generating…","Building your report.");
+  const outputEl = document.getElementById('cnwe-report-output');
+  outputEl.innerHTML = '<div style="text-align:center; padding:40px; color:var(--ink-3);">Loading data…</div>';
+
+  try{
+    /* ---- Use already-loaded global arrays ---- */
+    const from = new Date(fromDate+'T00:00:00');
+    const to   = new Date(toDate+'T23:59:59');
+    const inRange = d => { if(!d) return false; const dt=new Date(d); return dt>=from && dt<=to; };
+
+    const periodRfqs    = rfqs.filter(r=> inRange(r.open));
+    const periodApps    = applicants.filter(a=> inRange(a.received));
+    const periodSupps   = suppliers.filter(s=> inRange(s.createdAt));
+
+    // Clarifications
+    let periodClars = [];
+    try{
+      const { data } = await sb.from('rfq_clarifications').select('id, rfq_id, status, created_at').gte('created_at', fromDate).lte('created_at', toDate+'T23:59:59');
+      periodClars = data || [];
+    } catch(e){ /* clarifications table may not exist */ }
+
+    /* ---- Stats ---- */
+    const totalR   = periodRfqs.length;
+    const openR    = periodRfqs.filter(r=> r.status==='open' || (r.close && new Date(r.close)>new Date())).length;
+    const closedR  = periodRfqs.filter(r=> r.status==='closed' || (r.close && new Date(r.close)<=new Date() && r.status!=='draft')).length;
+    const draftR   = periodRfqs.filter(r=> r.status==='draft').length;
+    const totalApps= periodApps.length;
+    const totalS   = suppliers.length;
+    const newS     = periodSupps.length;
+    const activeS  = suppliers.filter(s=>s.status!=='removed').length;
+    const avgApps  = totalR>0 ? (applicants.filter(a=> periodRfqs.some(r=>r.id===a.rfq)).length / totalR).toFixed(1) : '0';
+    const totalClars    = periodClars.length;
+    const answeredClars = periodClars.filter(c=>c.status==='answered').length;
+
+    // Province breakdown
+    const provCounts={};
+    suppliers.forEach(s=>{ const p=s.province||'Unknown'; provCounts[p]=(provCounts[p]||0)+1; });
+
+    // Applicant status breakdown
+    const appStatusCounts={};
+    periodApps.forEach(a=>{ const st=a.status||'received'; appStatusCounts[st]=(appStatusCounts[st]||0)+1; });
+
+    /* ---- Branding ---- */
+    const logoEl = document.querySelector('.brand .logo-plate img');
+    const logoUrl = logoEl ? logoEl.src : '';
+    const orgName = 'CNWE Energy';
+    const brandColor = '#0E1826';
+    const accentColor = '#C9A84C';
+    const fmtDate = d => { if(!d) return '—'; return new Date(d).toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'}); };
+
+    /* ---- Build HTML ---- */
+    let html = `
+    <div id="cnwe-report-printable" style="background:#fff; color:#222; font-family:'IBM Plex Sans', Arial, sans-serif; padding:12px 30px 30px; border-radius:8px; border:1px solid #ddd;">
+      <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid ${accentColor}; padding-bottom:16px; margin-bottom:22px; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; align-items:center; gap:14px;">
+          ${logoUrl ? `<img src="${logoUrl}" alt="Logo" style="height:50px; width:auto; max-width:160px; object-fit:contain;" crossorigin="anonymous">` : ''}
+          <div>
+            <h1 style="margin:0; font-size:22px; color:${brandColor};">${orgName}</h1>
+            <p style="margin:2px 0 0; font-size:13px; color:#888;">Procurement Report</p>
+          </div>
+        </div>
+        <div style="text-align:right; font-size:13px; color:#666;">
+          <div><strong>Period:</strong> ${fmtDate(fromDate)} — ${fmtDate(toDate)}</div>
+          <div><strong>Generated:</strong> ${fmtDate(new Date())}</div>
+        </div>
+      </div>`;
+
+    /* ---- Executive Summary ---- */
+    if(sections.summary){
+      html += `
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Executive Summary</h2>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:14px;">
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${brandColor};"><div style="font-size:28px; font-weight:700; color:${brandColor};">${totalR}</div><div style="font-size:12px; color:#888; margin-top:4px;">RFQs Published</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #4caf50;"><div style="font-size:28px; font-weight:700; color:#4caf50;">${openR}</div><div style="font-size:12px; color:#888; margin-top:4px;">Open RFQs</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #f44336;"><div style="font-size:28px; font-weight:700; color:#f44336;">${closedR}</div><div style="font-size:12px; color:#888; margin-top:4px;">Closed RFQs</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${accentColor};"><div style="font-size:28px; font-weight:700; color:${accentColor};">${totalApps}</div><div style="font-size:12px; color:#888; margin-top:4px;">Applications</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #9c27b0;"><div style="font-size:28px; font-weight:700; color:#9c27b0;">${totalS}</div><div style="font-size:12px; color:#888; margin-top:4px;">Total Suppliers</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #009688;"><div style="font-size:28px; font-weight:700; color:#009688;">${newS}</div><div style="font-size:12px; color:#888; margin-top:4px;">New Registrations</div></div>
+        </div>
+      </div>`;
+    }
+
+    /* ---- RFQ Register ---- */
+    if(sections.rfqs){
+      html += `
+      <div style="margin-bottom:22px;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Register</h2>
+        <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          <thead><tr style="background:${brandColor}; color:#fff;">
+            <th style="padding:8px 10px; text-align:left;">RFQ Title</th>
+            <th style="padding:8px 10px; text-align:left;">Category</th>
+            <th style="padding:8px 10px; text-align:left;">Open Date</th>
+            <th style="padding:8px 10px; text-align:left;">Close Date</th>
+            <th style="padding:8px 10px; text-align:center;">Status</th>
+            <th style="padding:8px 10px; text-align:center;">Applications</th>
+          </tr></thead><tbody>`;
+      if(periodRfqs.length===0) html += `<tr><td colspan="6" style="padding:12px; text-align:center; color:#999;">No RFQs in the selected period.</td></tr>`;
+      periodRfqs.forEach((r,i)=>{
+        const appCount = applicants.filter(a=>a.rfq===r.id).length;
+        let status = r.status || 'draft';
+        let statusColor = status==='open'?'#4caf50':status==='closed'?'#f44336':'#999';
+        if(r.close && new Date(r.close)<=new Date() && status!=='draft'){ status='closed'; statusColor='#f44336'; }
+        html += `<tr style="background:${i%2===0?'#fff':'#f9f9f9'}; border-bottom:1px solid #eee;">
+          <td style="padding:8px 10px;">${r.title||'—'}</td>
+          <td style="padding:8px 10px;">${r.category||'—'}</td>
+          <td style="padding:8px 10px;">${fmtDate(r.open)}</td>
+          <td style="padding:8px 10px;">${fmtDate(r.close)}</td>
+          <td style="padding:8px 10px; text-align:center;"><span style="background:${statusColor}; color:#fff; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; text-transform:capitalize;">${status}</span></td>
+          <td style="padding:8px 10px; text-align:center; font-weight:600;">${appCount}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div></div>`;
+    }
+
+    /* ---- RFQ Status Chart ---- */
+    if(sections.statusChart){
+      const statusSvg = _svgPieDonut([openR,closedR,draftR], ['Open','Closed','Draft'], ['#4caf50','#f44336','#999'], 220, true);
+      html += `<div style="margin-bottom:22px; page-break-inside:avoid;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">RFQ Status Distribution</h2><div style="max-width:320px; margin:0 auto;">${statusSvg}</div></div>`;
+    }
+
+    /* ---- Applications per RFQ ---- */
+    if(sections.appsChart){
+      const appLabels = periodRfqs.map(r=>(r.title||'—').substring(0,30));
+      const appData = periodRfqs.map(r=> applicants.filter(a=>a.rfq===r.id).length);
+      const appsSvg = _svgBarH(appData, appLabels, accentColor, 650);
+      html += `<div style="margin-bottom:22px;"><h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Applications per RFQ</h2><div style="max-width:700px;">${appsSvg}</div></div>`;
+    }
+
+    /* ---- Supplier Overview ---- */
+    if(sections.suppliers){
+      const provSvg = _svgPieDonut(Object.values(provCounts), Object.keys(provCounts), ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 200, true, 'Suppliers by Province');
+      html += `
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Supplier Overview</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;">
+          <table style="width:100%; border-collapse:collapse; font-size:13px;">
+            <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">Total Registered Suppliers</td><td style="padding:6px 0; text-align:right; font-weight:700;">${totalS}</td></tr>
+            <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">Active</td><td style="padding:6px 0; text-align:right; font-weight:700; color:#4caf50;">${activeS}</td></tr>
+            <tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0;">New in Period</td><td style="padding:6px 0; text-align:right; font-weight:700; color:${accentColor};">${newS}</td></tr>
+            <tr><td style="padding:6px 0;">Avg. Applications per RFQ</td><td style="padding:6px 0; text-align:right; font-weight:700;">${avgApps}</td></tr>
+          </table>
+          <div style="max-width:260px;">${provSvg}</div>
+        </div>
+      </div>`;
+    }
+
+    /* ---- Submission Status ---- */
+    if(sections.submissions){
+      const ssLabels = Object.keys(appStatusCounts);
+      const ssSvg = _svgPieDonut(Object.values(appStatusCounts), ssLabels, ['#0E1826','#C9A84C','#4caf50','#f44336','#9c27b0','#009688','#ff9800','#2196f3','#795548'], 200, false);
+      html += `
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Application Status Breakdown</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;">
+          <table style="width:100%; border-collapse:collapse; font-size:13px;">
+            <thead><tr style="border-bottom:2px solid ${brandColor};"><th style="text-align:left; padding:6px 0;">Status</th><th style="text-align:right; padding:6px 0;">Count</th></tr></thead><tbody>`;
+      ssLabels.forEach(s=>{ html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:6px 0; text-transform:capitalize;">${s}</td><td style="padding:6px 0; text-align:right; font-weight:700;">${appStatusCounts[s]}</td></tr>`; });
+      if(ssLabels.length===0) html += `<tr><td colspan="2" style="padding:12px; text-align:center; color:#999;">No applications in the selected period.</td></tr>`;
+      html += `</tbody></table><div style="max-width:260px;">${ssSvg}</div></div></div>`;
+    }
+
+    /* ---- Clarifications ---- */
+    if(sections.clarifications){
+      html += `
+      <div style="margin-bottom:22px; page-break-inside:avoid;">
+        <h2 style="font-size:16px; color:${brandColor}; border-bottom:1px solid #eee; padding-bottom:8px; margin-top:0;">Clarifications</h2>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:14px;">
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${brandColor};"><div style="font-size:28px; font-weight:700; color:${brandColor};">${totalClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Total</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid #4caf50;"><div style="font-size:28px; font-weight:700; color:#4caf50;">${answeredClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Answered</div></div>
+          <div style="background:#f7f9fc; border-radius:8px; padding:16px; text-align:center; border-left:4px solid ${accentColor};"><div style="font-size:28px; font-weight:700; color:${accentColor};">${totalClars-answeredClars}</div><div style="font-size:12px; color:#888; margin-top:4px;">Pending</div></div>
+        </div>
+      </div>`;
+    }
+
+    /* ---- Footer ---- */
+    html += `
+      <div style="border-top:2px solid ${accentColor}; padding-top:12px; margin-top:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="font-size:11px; color:#aaa;">Confidential — ${orgName}</div>
+        <div style="font-size:11px; color:#aaa;">Powered by iHubSA RFQ Hub</div>
+      </div>
+    </div>`;
+
+    outputEl.innerHTML = html;
+
+    document.getElementById('cnwe-report-pdf-btn').style.display='inline-block';
+    document.getElementById('cnwe-report-word-btn').style.display='inline-block';
+    toast("Report ready","Your report has been generated.");
+
+  } catch(err){
+    console.error('Report generation error:', err);
+    outputEl.innerHTML = '<div style="text-align:center; padding:40px; color:#F87171;">Error generating report. Please try again.</div>';
+    toast("Error","Could not generate report.");
+  }
+}
+
+/* ── PDF download ── */
+function downloadCnweReportPDF(){
+  const el = document.getElementById('cnwe-report-printable');
+  if(!el){ toast("No report","Generate the report first."); return; }
+  const fromDate = document.getElementById('cnwe-report-date-from').value;
+  const toDate   = document.getElementById('cnwe-report-date-to').value;
+  const filename = `CNWE_Energy_Report_${fromDate}_to_${toDate}.pdf`;
+  if(typeof html2pdf==='undefined'){ toast("Missing library","PDF library not loaded."); return; }
+  toast("Preparing…","Building your PDF.");
+
+  /* Clone into off-screen container so controls above don't push content down */
+  const clone = el.cloneNode(true);
+  clone.removeAttribute('id');
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:fixed; left:-9999px; top:0; width:800px; background:#fff;';
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+
+  html2pdf().set({
+    margin:[5,10,10,10], filename, image:{type:'jpeg',quality:0.95},
+    html2canvas:{scale:2,useCORS:true,logging:false},
+    jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
+    pagebreak:{mode:['css','legacy']}
+  }).from(clone).save().then(()=>{
+    document.body.removeChild(wrapper);
+    toast("Downloaded","PDF saved.");
+  }).catch(()=>{ document.body.removeChild(wrapper); });
+}
+
+/* ── Word download ── */
+function downloadCnweReportWord(){
+  const el = document.getElementById('cnwe-report-printable');
+  if(!el){ toast("No report","Generate the report first."); return; }
+  const fromDate = document.getElementById('cnwe-report-date-from').value;
+  const toDate   = document.getElementById('cnwe-report-date-to').value;
+  const filename = `CNWE_Energy_Report_${fromDate}_to_${toDate}.doc`;
+
+  const clone = el.cloneNode(true);
+
+  const htmlContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+    <head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#222;}table{border-collapse:collapse;width:100%;}td,th{padding:4pt 6pt;border:1px solid #ddd;}img{max-width:100%;}svg{max-width:100%;}</style></head>
+    <body>${clone.innerHTML}</body></html>`;
+
+  const blob = new Blob(['﻿', htmlContent], {type:'application/msword'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast("Downloaded","Word document saved.");
+}
+
+/* ── Ensure report functions are on window (belt-and-suspenders for caching issues) ── */
+window.setCnweReportRange    = setCnweReportRange;
+window.generateCnweReport    = generateCnweReport;
+window.downloadCnweReportPDF = downloadCnweReportPDF;
+window.downloadCnweReportWord = downloadCnweReportWord;
+window._svgPieDonut          = _svgPieDonut;
+window._svgBarH              = _svgBarH;
+
+/* Diagnostic: confirm report functions loaded (check browser console) */
+console.log('[cnwe-app.js v3] Report functions loaded:', typeof generateCnweReport === 'function');
