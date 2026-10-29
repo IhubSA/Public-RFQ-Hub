@@ -9,9 +9,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
    VERSION
    ============================================================ */
 const VERSION_INFO = {
-  version: "2.41.1",
-  date: "2026-10-09",
+  version: "2.41.2",
+  date: "2026-10-29",
   changelog: [
+    "2.41.2 (2026-10-29) — Any staff member can now assign a case to a colleague. Previously only administrators saw other staff in the Assign list; everyone else saw just their own name.",
     "2.41.1 (2026-10-09) \u2014 Reports tab restored (date-range report with PDF and Word download) alongside the addendum documents and overdue-review features.",
     "2.41.0 (2026-10-09) — Addenda can now carry multiple documents. When issuing an addendum, staff can add several files at once; they are listed as downloads under the addendum on the public tender listing and attached to the email sent to applicants.",
     "2.40.0 (2026-10-08) \u2014 Overdue review tracking. The dashboard now shows a large red \"APPLICATIONS ARE NOT BEING PROCESSED\" banner whenever any application has sat in a review stage with no recorded action for longer than that stage's allowance (Application Received 2 days, Under Screening/Validation 3, Proposal Submitted 2, Assigned for Evaluation 3, Under Evaluation 7, Recommendation Recorded 3 \u2014 editable in REVIEW_SLA_DAYS), and disappears once the backlog is cleared. The applicant pipeline gets chevron stage headers with an overdue count per stage, overdue cards highlighted in red and sorted to the top with how many days they've waited, a summary strip and a Show-overdue-only filter. Province on a new RFQ is now fixed to the Free State (no other provinces can be added).",
@@ -3184,6 +3185,16 @@ async function loadEmployeesAndPermissions(){
   employees = data || [];
   const { data: { user } } = await sb.auth.getUser();
   currentEmployee = employees.find(e=>e.id === (user && user.id)) || null;
+  // Non-admin staff can only read their own row (RLS), so fetch a limited name list
+  // (no permission flags except can_publish_rfqs) to let them assign colleagues.
+  if(currentEmployee && !currentEmployee.is_super_admin){
+    const { data: dir, error: dirErr } = await sb.rpc('rfq_staff_directory');
+    if(dirErr){ console.error('staff directory load failed', dirErr); }
+    else {
+      const have = new Set(employees.map(e=>e.id));
+      (dir||[]).forEach(d=>{ if(!have.has(d.id)) employees.push(d); });
+    }
+  }
 }
 function can(perm){
   // The founding admin (no employees row resolvable yet, e.g. mid-load) defaults to
